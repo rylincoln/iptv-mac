@@ -34,11 +34,18 @@ public struct PlayerStats: Equatable, Sendable {
 }
 
 @MainActor public protocol Player: AnyObject {
-    /// Replaces whatever is playing; implementations stop the old stream first.
+    /// Replaces whatever is playing; implementations stop the old stream first. Before it returns,
+    /// `state` must no longer describe the old stream: a stale `.error` or `.ended` fails the new start
+    /// on the supervisor's next tick. Likewise `stats` must already be the new stream's, counting from
+    /// zero, since the supervisor reads them straight after as the baseline for progress.
     func play(url: URL, bufferMs: Int)
     func stop()
     /// 0...100
     var volume: Int { get set }
+    /// Read by `PlaybackSupervisor` alone, once a tick. An implementation may judge progress by the
+    /// change since its previous reading (`VLCPlayer` does), so a reading taken anywhere else would
+    /// shift that window and change what the supervisor's next reading says: a playing stream could
+    /// read as buffering, which the supervisor counts as a rebuffer.
     var state: PlayerState { get }
     var stats: PlayerStats { get }
 }

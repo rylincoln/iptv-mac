@@ -7,125 +7,128 @@ private let urlB = "http://example.invalid/b"
 
 // MARK: - Doubles
 
-@MainActor final class TestClock {
-    var now = Date(timeIntervalSince1970: 1_800_000_000)
-    /// The total by which the wall clock has been set (`setWallClock`), as opposed to time passing.
-    private(set) var adjustment: TimeInterval = 0
-    func advance(_ seconds: TimeInterval) { now = now.addingTimeInterval(seconds) }
-    /// Sets the wall clock back (negative) or forward, with no time passing.
-    func setWallClock(by seconds: TimeInterval) {
-        now = now.addingTimeInterval(seconds)
-        adjustment += seconds
-    }
-}
-
-@MainActor final class FakePlayer: Player {
-    struct PlayCall { var url: URL; var bufferMs: Int; var at: Date; var adjustment: TimeInterval }
-    let clock: TestClock
-    var plays: [PlayCall] = []
-    var stopCount = 0
-    var volume = 100
-    var state: PlayerState = .idle
-    var stats: PlayerStats = .zero
-
-    init(clock: TestClock) { self.clock = clock }
-
-    func play(url: URL, bufferMs: Int) {
-        // Shared recorder: every test in this file fails if a URL is replayed within one second of
-        // real time (the wall clock's difference, less any setting of the clock in between).
-        if let last = plays.last(where: { $0.url == url }),
-           clock.now.timeIntervalSince(last.at) - (clock.adjustment - last.adjustment) < 1 {
-            Issue.record("play(url:) called twice for the same URL within one second")
-        }
-        plays.append(PlayCall(url: url, bufferMs: bufferMs, at: clock.now, adjustment: clock.adjustment))
-    }
-
-    func stop() { stopCount += 1 }
-}
-
-final class FakeMemory: BufferMemory, @unchecked Sendable {
-    private let lock = NSLock()
-    private var values: [String: Int] = [:]
-    init(_ initial: [String: Int] = [:]) { values = initial }
-    func bufferMs(forStreamURL url: String) -> Int? { lock.withLock { values[url] } }
-    func setBufferMs(_ ms: Int, forStreamURL url: String) { lock.withLock { values[url] = ms } }
-}
-
-@MainActor final class Rig {
-    let clock = TestClock()
-    let player: FakePlayer
-    let memory: FakeMemory
-    let supervisor: PlaybackSupervisor
-    var log: [(status: PlaybackSupervisor.Status, at: Date)] = []
-
-    init(policy: SupervisorPolicy = .default, remembered: Int? = nil) {
-        player = FakePlayer(clock: clock)
-        memory = FakeMemory(remembered.map { [urlA: $0] } ?? [:])
-        let clock = clock
-        supervisor = PlaybackSupervisor(player: player, memory: memory, now: { clock.now }, policy: policy)
-        supervisor.onStatusChange = { [unowned self] status in log.append((status, self.clock.now)) }
-    }
-
-    var statuses: [PlaybackSupervisor.Status] { log.map(\.status) }
-    var status: PlaybackSupervisor.Status { supervisor.status }
-
-    func bump() {
-        player.stats.positionMs += 1000
-        player.stats.displayedPictures += 25
-        player.stats.decodedAudioBlocks += 40
-    }
-
-    /// Advance the clock, optionally make the stream progress and set the player state, then tick.
-    func tick(after dt: TimeInterval = 1, progress: Bool = false, state: PlayerState? = nil) {
-        clock.advance(dt)
-        if let state { player.state = state }
-        if progress { bump() }
-        supervisor.tick()
-    }
-
-    func run(_ seconds: Int, step: TimeInterval = 1, progress: Bool = false, state: PlayerState? = nil) {
-        var elapsed = 0.0
-        while elapsed < Double(seconds) {
-            tick(after: step, progress: progress, state: state)
-            elapsed += step
+// Nested in the suite, so that a double of the same name in another test file cannot clash.
+extension PlaybackSupervisorTests {
+    @MainActor final class TestClock {
+        var now = Date(timeIntervalSince1970: 1_800_000_000)
+        /// The total by which the wall clock has been set (`setWallClock`), as opposed to time passing.
+        private(set) var adjustment: TimeInterval = 0
+        func advance(_ seconds: TimeInterval) { now = now.addingTimeInterval(seconds) }
+        /// Sets the wall clock back (negative) or forward, with no time passing.
+        func setWallClock(by seconds: TimeInterval) {
+            now = now.addingTimeInterval(seconds)
+            adjustment += seconds
         }
     }
 
-    /// play(streamURL:) then a first picture.
-    func startPlaying(_ url: String = urlA) {
-        supervisor.play(streamURL: url)
-        tick(progress: true, state: .playing)
-    }
+    @MainActor final class FakePlayer: Player {
+        struct PlayCall { var url: URL; var bufferMs: Int; var at: Date; var adjustment: TimeInterval }
+        let clock: TestClock
+        var plays: [PlayCall] = []
+        var stopCount = 0
+        var volume = 100
+        var state: PlayerState = .idle
+        var stats: PlayerStats = .zero
 
-    /// Stall a playing stream: freeze it for `stallAfter`.
-    func freeze(seconds: Int = 4) { run(seconds, state: .playing) }
+        init(clock: TestClock) { self.clock = clock }
 
-    /// From a stalled/failed state, let the retry fire and the stream come back.
-    func recover() {
-        tick()  // the retry delay (1 s for attempt 1) elapses
-        tick(progress: true, state: .playing)
-    }
-
-    /// Never progress until the supervisor gives up.
-    func driveToUnavailable() {
-        supervisor.play(streamURL: urlA)
-        player.state = .opening
-        var guardTicks = 0
-        while status != .unavailable && guardTicks < 1000 { tick(); guardTicks += 1 }
-    }
-}
-
-/// The shortest real time between two play calls for the same URL.
-@MainActor func minSpacingPerURL(_ plays: [FakePlayer.PlayCall]) -> TimeInterval {
-    var minimum = TimeInterval.infinity
-    var lastByURL: [URL: FakePlayer.PlayCall] = [:]
-    for call in plays {
-        if let last = lastByURL[call.url] {
-            minimum = min(minimum, call.at.timeIntervalSince(last.at) - (call.adjustment - last.adjustment))
+        func play(url: URL, bufferMs: Int) {
+            // Shared recorder: every test in this file fails if a URL is replayed within one second of
+            // real time (the wall clock's difference, less any setting of the clock in between).
+            if let last = plays.last(where: { $0.url == url }),
+               clock.now.timeIntervalSince(last.at) - (clock.adjustment - last.adjustment) < 1 {
+                Issue.record("play(url:) called twice for the same URL within one second")
+            }
+            plays.append(PlayCall(url: url, bufferMs: bufferMs, at: clock.now, adjustment: clock.adjustment))
         }
-        lastByURL[call.url] = call
+
+        func stop() { stopCount += 1 }
+
+        /// The shortest real time between two play calls for the same URL.
+        var minSpacingPerURL: TimeInterval {
+            var minimum = TimeInterval.infinity
+            var lastByURL: [URL: PlayCall] = [:]
+            for call in plays {
+                if let last = lastByURL[call.url] {
+                    minimum = min(minimum, call.at.timeIntervalSince(last.at) - (call.adjustment - last.adjustment))
+                }
+                lastByURL[call.url] = call
+            }
+            return minimum
+        }
     }
-    return minimum
+
+    final class FakeMemory: BufferMemory, @unchecked Sendable {
+        private let lock = NSLock()
+        private var values: [String: Int] = [:]
+        init(_ initial: [String: Int] = [:]) { values = initial }
+        func bufferMs(forStreamURL url: String) -> Int? { lock.withLock { values[url] } }
+        func setBufferMs(_ ms: Int, forStreamURL url: String) { lock.withLock { values[url] = ms } }
+    }
+
+    @MainActor final class Rig {
+        let clock = TestClock()
+        let player: FakePlayer
+        let memory: FakeMemory
+        let supervisor: PlaybackSupervisor
+        var log: [(status: PlaybackSupervisor.Status, at: Date)] = []
+
+        init(policy: SupervisorPolicy = .default, remembered: Int? = nil) {
+            player = FakePlayer(clock: clock)
+            memory = FakeMemory(remembered.map { [urlA: $0] } ?? [:])
+            let clock = clock
+            supervisor = PlaybackSupervisor(player: player, memory: memory, now: { clock.now }, policy: policy)
+            supervisor.onStatusChange = { [unowned self] status in log.append((status, self.clock.now)) }
+        }
+
+        var statuses: [PlaybackSupervisor.Status] { log.map(\.status) }
+        var status: PlaybackSupervisor.Status { supervisor.status }
+
+        func bump() {
+            player.stats.positionMs += 1000
+            player.stats.displayedPictures += 25
+            player.stats.decodedAudioBlocks += 40
+        }
+
+        /// Advance the clock, optionally make the stream progress and set the player state, then tick.
+        func tick(after dt: TimeInterval = 1, progress: Bool = false, state: PlayerState? = nil) {
+            clock.advance(dt)
+            if let state { player.state = state }
+            if progress { bump() }
+            supervisor.tick()
+        }
+
+        func run(_ seconds: Int, step: TimeInterval = 1, progress: Bool = false, state: PlayerState? = nil) {
+            var elapsed = 0.0
+            while elapsed < Double(seconds) {
+                tick(after: step, progress: progress, state: state)
+                elapsed += step
+            }
+        }
+
+        /// play(streamURL:) then a first picture.
+        func startPlaying(_ url: String = urlA) {
+            supervisor.play(streamURL: url)
+            tick(progress: true, state: .playing)
+        }
+
+        /// Stall a playing stream: freeze it for `stallAfter`.
+        func freeze(seconds: Int = 4) { run(seconds, state: .playing) }
+
+        /// From a stalled/failed state, let the retry fire and the stream come back.
+        func recover() {
+            tick()  // the retry delay (1 s for attempt 1) elapses
+            tick(progress: true, state: .playing)
+        }
+
+        /// Never progress until the supervisor gives up.
+        func driveToUnavailable() {
+            supervisor.play(streamURL: urlA)
+            player.state = .opening
+            var guardTicks = 0
+            while status != .unavailable && guardTicks < 1000 { tick(); guardTicks += 1 }
+        }
+    }
 }
 
 // MARK: - Tests
@@ -332,6 +335,57 @@ final class FakeMemory: BufferMemory, @unchecked Sendable {
         #expect(rig.player.plays.count == 6)
         #expect(rig.status == .unavailable)
         #expect(rig.player.stopCount == stops)
+        #expect(rig.supervisor.reconnectCount == 5)
+    }
+
+    /// End to end: a playing stream loses the network, every reconnect fails to start, the supervisor
+    /// gives up, and from then on nothing is opened or stopped, however long it is left.
+    @Test func networkLostWhilePlayingEndsUnavailableAndStopsConnecting() {
+        let rig = Rig()
+        rig.startPlaying()
+        rig.run(30, progress: true, state: .playing)
+        #expect(rig.status == .playing)
+        rig.freeze()  // the network goes: the picture stops
+        #expect(rig.status == .reconnecting(attempt: 1))
+        var guardTicks = 0
+        while rig.status != .unavailable && guardTicks < 1000 { rig.tick(state: .opening); guardTicks += 1 }
+        let reconnecting = (1...5).map { PlaybackSupervisor.Status.reconnecting(attempt: $0) }
+        #expect(rig.statuses == [.starting, .playing] + reconnecting + [.unavailable])
+        #expect(rig.player.plays.count == 6)
+        #expect(rig.supervisor.reconnectCount == 5)
+        // The stall stepped the buffer up once; the failed starts after it left it alone.
+        #expect(rig.player.plays.dropFirst().allSatisfy { $0.bufferMs == 2000 })
+        #expect(rig.memory.bufferMs(forStreamURL: urlA) == 2000)
+        #expect(rig.player.minSpacingPerURL >= 1)
+        let stops = rig.player.stopCount
+        rig.run(600, state: .opening)
+        #expect(rig.status == .unavailable)
+        #expect(rig.player.plays.count == 6)
+        #expect(rig.player.stopCount == stops)
+    }
+
+    /// Reconnects actually made: a failure still waiting out its delay is not one yet, and the
+    /// failure that gives up is never one.
+    @Test func reconnectCountCountsOnlyReconnectsMade() {
+        let rig = Rig()
+        rig.supervisor.play(streamURL: urlA)
+        rig.run(12, state: .opening)
+        #expect(rig.status == .reconnecting(attempt: 1))
+        #expect(rig.supervisor.reconnectCount == 0)
+        rig.tick(state: .opening)
+        #expect(rig.player.plays.count == 2)
+        #expect(rig.supervisor.reconnectCount == 1)
+        var guardTicks = 0
+        while rig.status != .unavailable && guardTicks < 1000 { rig.tick(state: .opening); guardTicks += 1 }
+        #expect(rig.player.plays.count == 6)
+        #expect(rig.supervisor.reconnectCount == 5)
+        // A wake from unavailable schedules attempt 1 again; it counts once its play call is made.
+        rig.clock.advance(7200)
+        rig.supervisor.tick()
+        #expect(rig.status == .reconnecting(attempt: 1))
+        #expect(rig.supervisor.reconnectCount == 5)
+        rig.tick()
+        #expect(rig.player.plays.count == 7)
         #expect(rig.supervisor.reconnectCount == 6)
     }
 
@@ -382,12 +436,50 @@ final class FakeMemory: BufferMemory, @unchecked Sendable {
         #expect(rig.memory.bufferMs(forStreamURL: urlA) == 4000)
         rig.run(20, step: 5, progress: true, state: .playing)
         #expect(rig.memory.bufferMs(forStreamURL: urlA) == 2000)
-        #expect(rig.supervisor.currentBufferMs == 2000)
+        #expect(rig.supervisor.currentBufferMs == 4000)  // the live stream was opened at 4000
         #expect(rig.player.plays.count == 1)
         #expect(rig.status == .playing)
         rig.run(3600, step: 5, progress: true, state: .playing)
         #expect(rig.memory.bufferMs(forStreamURL: urlA) == 1000)  // saturates at the first step
         #expect(rig.player.plays.count == 1)
+    }
+
+    /// A step down is for the next play call; the live stream keeps the buffer it was opened with, and a
+    /// stall steps up from that, not from the lowered value.
+    @Test func stallAfterAStepDownReplaysOneStepAboveTheBufferThatStalled() {
+        let rig = Rig(remembered: 4000)
+        rig.startPlaying()
+        rig.run(1810, step: 5, progress: true, state: .playing)  // thirty clean minutes: one step down
+        #expect(rig.memory.bufferMs(forStreamURL: urlA) == 2000)
+        #expect(rig.supervisor.currentBufferMs == 4000)
+        rig.freeze()
+        #expect(rig.status == .reconnecting(attempt: 1))
+        #expect(rig.memory.bufferMs(forStreamURL: urlA) == 8000)
+        #expect(rig.supervisor.currentBufferMs == 8000)
+        rig.tick()
+        #expect(rig.player.plays.count == 2)
+        #expect(rig.player.plays.last?.bufferMs == 8000)
+    }
+
+    /// Opened at the top step and since stepped down: a restart could not add buffer to the live
+    /// stream, so a stutter is ridden out, and a real stall remembers the top step again.
+    @Test func stutterAfterAStepDownAtTheTopStepIsRiddenOut() {
+        let rig = Rig(remembered: 8000)
+        rig.startPlaying()
+        rig.run(1810, step: 5, progress: true, state: .playing)
+        #expect(rig.memory.bufferMs(forStreamURL: urlA) == 4000)
+        #expect(rig.supervisor.currentBufferMs == 8000)
+        for _ in 1...3 {
+            rig.tick(progress: true, state: .buffering)
+            rig.tick(progress: true, state: .playing)
+        }
+        #expect(rig.status == .playing)
+        #expect(rig.player.plays.count == 1)
+        rig.freeze()
+        #expect(rig.status == .reconnecting(attempt: 1))
+        #expect(rig.memory.bufferMs(forStreamURL: urlA) == 8000)
+        rig.tick()
+        #expect(rig.player.plays.last?.bufferMs == 8000)
     }
 
     @Test func wakeGapIsNotAStall() {
@@ -405,6 +497,20 @@ final class FakeMemory: BufferMemory, @unchecked Sendable {
         rig.tick(state: .playing)
         #expect(rig.status == .reconnecting(attempt: 1))  // a stream lost in sleep is still caught afterwards...
         #expect(rig.memory.bufferMs(forStreamURL: urlA) == nil)  // ...but is not billed to the buffer
+    }
+
+    /// The wall clock set forward by less than a wake, with no time passing: progress is seen first,
+    /// so a stream that is still progressing is not failed.
+    @Test func forwardClockStepWhileProgressingIsNotAStall() {
+        let rig = Rig()
+        rig.startPlaying()
+        rig.clock.setWallClock(by: 20)
+        rig.tick(after: 0, progress: true, state: .playing)
+        #expect(rig.status == .playing)
+        #expect(rig.player.plays.count == 1)
+        #expect(rig.memory.bufferMs(forStreamURL: urlA) == nil)
+        rig.run(5, progress: true, state: .playing)
+        #expect(rig.status == .playing)
     }
 
     /// Fails four times, recovers to .playing (not yet stable), returns the buffer in force.
@@ -468,6 +574,43 @@ final class FakeMemory: BufferMemory, @unchecked Sendable {
         #expect(rig.player.plays.last?.bufferMs == 2000)
     }
 
+    /// After a wake, rebuffering with no progress is the sleep's doing, as a stall then would be: the
+    /// stream is restarted, but its buffer is not stepped up. With a tick a second the default policy
+    /// stalls first; ticks bunched closer together (a late timer catching up) reach the storm.
+    @Test func rebufferStormAfterAWakeWithNoProgressIsNotBilled() {
+        let rig = Rig()
+        rig.startPlaying()
+        rig.clock.advance(7200)
+        rig.player.state = .playing
+        rig.supervisor.tick()
+        for _ in 1...2 {
+            rig.tick(after: 0.5, state: .buffering)
+            rig.tick(after: 0.5, state: .playing)
+        }
+        rig.tick(after: 0.5, state: .buffering)  // the third rebuffer, 2.5 s after the wake
+        #expect(rig.status == .reconnecting(attempt: 1))
+        #expect(rig.memory.bufferMs(forStreamURL: urlA) == nil)
+        #expect(rig.supervisor.currentBufferMs == 1000)
+        rig.tick()
+        #expect(rig.player.plays.count == 2)
+        #expect(rig.player.plays.last?.bufferMs == 1000)
+    }
+
+    @Test func rebufferStormAfterPostWakeProgressIsStillAStutter() {
+        let rig = Rig()
+        rig.startPlaying()
+        rig.clock.advance(7200)
+        rig.player.state = .playing
+        rig.supervisor.tick()
+        rig.tick(progress: true, state: .playing)  // the stream survived the sleep
+        for round in 1...3 {
+            rig.tick(progress: true, state: .buffering)
+            if round < 3 { rig.tick(progress: true, state: .playing) }
+        }
+        #expect(rig.status == .reconnecting(attempt: 1))
+        #expect(rig.memory.bufferMs(forStreamURL: urlA) == 2000)
+    }
+
     @Test func wakeFromUnavailableRetriesFromAttemptOne() {
         let rig = Rig()
         rig.driveToUnavailable()
@@ -477,6 +620,21 @@ final class FakeMemory: BufferMemory, @unchecked Sendable {
         #expect(rig.player.plays.count == 6)
         rig.tick()
         #expect(rig.player.plays.count == 7)
+    }
+
+    /// Given up, nothing is open for a sleep to have cut off: a clock set back must not start another
+    /// round of reconnects. A real wake, a long forward gap, still does.
+    @Test func clockSetBackWhileUnavailableDoesNotRetry() {
+        let rig = Rig()
+        rig.driveToUnavailable()
+        rig.clock.setWallClock(by: -3600)
+        rig.tick()
+        #expect(rig.status == .unavailable)
+        rig.run(120)
+        #expect(rig.player.plays.count == 6)
+        rig.clock.advance(7200)
+        rig.supervisor.tick()
+        #expect(rig.status == .reconnecting(attempt: 1))
     }
 
     @Test func wakeMidRetryRestartsFromAttemptOne() {
@@ -507,7 +665,7 @@ final class FakeMemory: BufferMemory, @unchecked Sendable {
         #expect(rig.status == .reconnecting(attempt: 1))
         rig.tick()
         #expect(rig.player.plays.count == 2)
-        #expect(minSpacingPerURL(rig.player.plays) >= 1)
+        #expect(rig.player.minSpacingPerURL >= 1)
     }
 
     @Test func clockSetBackMidRetryDoesNotPostponeTheRetry() {
@@ -528,7 +686,7 @@ final class FakeMemory: BufferMemory, @unchecked Sendable {
         let plays = rig.player.plays.count
         rig.run(120, state: .opening)
         #expect(rig.player.plays.count == plays)
-        #expect(minSpacingPerURL(rig.player.plays) >= 1)
+        #expect(rig.player.minSpacingPerURL >= 1)
     }
 
     @Test func clockSetBackWhileAPlayIsDeferredDoesNotPostponeIt() {
@@ -544,7 +702,7 @@ final class FakeMemory: BufferMemory, @unchecked Sendable {
         rig.tick(after: 0.5)
         #expect(rig.player.plays.count == 2)
         #expect(rig.status == .starting)
-        #expect(minSpacingPerURL(rig.player.plays) >= 1)
+        #expect(rig.player.minSpacingPerURL >= 1)
     }
 
     @Test func sameChannelPlayedAgainAfterTheClockWasSetBackIsNotPostponed() {
@@ -556,7 +714,7 @@ final class FakeMemory: BufferMemory, @unchecked Sendable {
         #expect(rig.player.plays.count == 1)
         rig.tick()
         #expect(rig.player.plays.count == 2)
-        #expect(minSpacingPerURL(rig.player.plays) >= 1)
+        #expect(rig.player.minSpacingPerURL >= 1)
     }
 
     @Test func playNewChannelAbandonsPendingRetry() {
@@ -668,7 +826,7 @@ final class FakeMemory: BufferMemory, @unchecked Sendable {
             let rig = Rig(policy: policy)
             scenario(rig)
             #expect(rig.player.plays.count >= 2, "\(name) must have reconnected")
-            #expect(minSpacingPerURL(rig.player.plays) >= 1, "\(name)")
+            #expect(rig.player.minSpacingPerURL >= 1, "\(name)")
         }
     }
 

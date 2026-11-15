@@ -8,7 +8,11 @@ import Foundation
 
     private enum Failure { case failedStart, stall, stutter, lostInSleep }
 
-    /// Spacing between two `player.play` calls for the same stream, whatever the policy says.
+    /// The least time between a play call and the one before it, when both are for the same stream,
+    /// whatever the policy says. Only the last play call is remembered, not one per stream: switching to
+    /// another channel plays at once, and A, B, A goes straight back to A. Every reconnect is of the
+    /// stream played last, so a reconnect always comes at least this long after the play call before it,
+    /// whichever stream that was.
     private static let minPlaySpacing: TimeInterval = 1
 
     private let player: Player
@@ -17,12 +21,17 @@ import Foundation
     private let policy: SupervisorPolicy
 
     public private(set) var status: Status = .idle
+    /// Reconnects made since the channel was chosen: play calls after a failure. A failure still
+    /// waiting out its delay is not one yet, and the failure that gives up is never one.
     public private(set) var reconnectCount = 0
+    /// The buffer the live stream was opened with. Between a failure and the reconnect, and while
+    /// unavailable, the one the next play call will open with.
     public private(set) var currentBufferMs: Int
     public var onStatusChange: ((Status) -> Void)?
 
     private var streamURL: String?
     private var url: URL?
+    private var nextBufferMs: Int                // what the next play call opens with; remembered
     private var failures = 0                     // consecutive failed attempts
     private var nextPlayAt: Date?                // a play call is due at this time
     private var lastPlayAt: Date?
@@ -38,12 +47,23 @@ import Foundation
     private var rebufferTimes: [Date] = []
     private var postWake = false                 // woke while playing; no progress seen since
 
+    /// `now` times everything: the start and stall timers, the retry delays, the spacing of play calls,
+    /// and the gap between ticks that reveals a sleep. Given the wall clock, a step of the clock is read
+    /// as time passing. A step back, or forward past `wakeGap`, is taken for a wake and costs nothing
+    /// (when unavailable, only the forward one restarts the retries).
+    /// Progress is checked before any timer, so a stream that is progressing is never failed by a step.
+    /// But a forward step between `stallAfter` and `wakeGap`, landing on a tick that saw no progress,
+    /// fails the stream as a stall (and steps its buffer up), and one past `startTimeout` during a start
+    /// fails the start: by `now` alone that cannot be told from the real thing. A `now` that is never set
+    /// and counts time asleep (one read from `ContinuousClock`) has no such limit, and still shows a
+    /// sleep as a gap.
     public init(player: Player, memory: BufferMemory, now: @escaping () -> Date, policy: SupervisorPolicy = .default) {
         self.player = player
         self.memory = memory
         self.now = now
         self.policy = policy
         currentBufferMs = policy.bufferStepsMs.first ?? 1000
+        nextBufferMs = currentBufferMs
     }
 
     // MARK: Commands
@@ -57,6 +77,7 @@ import Foundation
         nextPlayAt = nil
         lastTickAt = time
         currentBufferMs = memory.bufferMs(forStreamURL: streamURL) ?? policy.bufferStepsMs.first ?? 1000
+        nextBufferMs = currentBufferMs
         guard let parsed = URL(string: streamURL) else {
             url = nil
             player.stop()
@@ -97,7 +118,9 @@ import Foundation
         case .idle:
             return
         case .unavailable:
-            if isWake(at: time) { restartFromAttemptOne(at: time) }
+            // Only a sleep starts over here. Nothing is open for a clock set back to have cut off, and no
+            // timer waits on it: taken for a wake, it would only start another round of reconnects.
+            if isLongGap(at: time) { restartFromAttemptOne(at: time) }
             return
         case .starting, .playing, .reconnecting:
             break
@@ -140,7 +163,8 @@ import Foundation
 
         if status == .playing, wasPlaying, state == .buffering, noteRebuffer(at: time) {
             guard isAtTopBufferStep else {
-                fail(.stutter, at: time)
+                // Woken with no progress since: the sleep's doing, as a stall would be, not the buffer's.
+                fail(postWake ? .lostInSleep : .stutter, at: time)
                 return
             }
             // A restart could not add buffer here; it would only cost a connection and an attempt.
@@ -191,12 +215,13 @@ import Foundation
         if kind == .stall || kind == .stutter { moveBuffer(by: 1) }
         resetRun()
         failures += 1
-        reconnectCount += 1
         scheduleRetry(at: time)
     }
 
-    /// Moves to `.reconnecting(failures)` and the delay for that attempt, or gives up.
+    /// Moves to `.reconnecting(failures)` and the delay for that attempt, or gives up. The stream is
+    /// stopped by now, so the buffer in force is the one the next play call opens with.
     private func scheduleRetry(at time: Date) {
+        currentBufferMs = nextBufferMs
         guard failures >= 1, failures <= policy.retryDelays.count else {
             nextPlayAt = nil
             setStatus(.unavailable)
@@ -212,7 +237,6 @@ import Foundation
         resetRun()
         forgetProgress(at: time)
         failures = 1
-        reconnectCount += 1
         scheduleRetry(at: time)
     }
 
@@ -235,15 +259,17 @@ import Foundation
         nextPlayAt = nil
         guard let url else { return }
         resetRun()
+        if case .reconnecting = status { reconnectCount += 1 }
         lastPlayAt = time
         lastPlayedURL = streamURL
         attemptStartedAt = time
         lastProgressAt = time
+        currentBufferMs = nextBufferMs
         player.play(url: url, bufferMs: currentBufferMs)
         baseline = player.stats
     }
 
-    /// Never sooner than one second after the previous play call for the same stream.
+    /// `time`, or `minPlaySpacing` after the last play call if that call was for this same stream.
     private func earliest(_ time: Date) -> Date {
         guard let last = lastPlayAt, lastPlayedURL == streamURL else { return time }
         return max(time, last.addingTimeInterval(Self.minPlaySpacing))
@@ -259,22 +285,25 @@ import Foundation
 
     // MARK: Buffer
 
-    /// No step is above the buffer in force, so stepping up would not change it.
+    /// No step is above the buffer the live stream was opened with, so a restart could not add any.
     private var isAtTopBufferStep: Bool {
         !policy.bufferStepsMs.contains { $0 > currentBufferMs }
     }
 
+    /// Sets, and remembers, the buffer for the next play call; the live stream keeps its own. Up: one
+    /// step above the buffer the stream that failed was opened with, or that buffer again at the top
+    /// step, so a step down taken meanwhile is undone. Down: one step below the next play call's buffer.
     private func moveBuffer(by direction: Int) {
         let steps = policy.bufferStepsMs
-        let next: Int?
+        let target: Int?
         if direction > 0 {
-            next = steps.first { $0 > currentBufferMs }
+            target = steps.first { $0 > currentBufferMs } ?? currentBufferMs
         } else {
-            next = steps.last { $0 < currentBufferMs }
+            target = steps.last { $0 < nextBufferMs }
         }
-        guard let next, next != currentBufferMs, let streamURL else { return }
-        currentBufferMs = next
-        memory.setBufferMs(next, forStreamURL: streamURL)
+        guard let target, target != nextBufferMs, let streamURL else { return }
+        nextBufferMs = target
+        memory.setBufferMs(target, forStreamURL: streamURL)
     }
 
     // MARK: Bookkeeping
@@ -283,7 +312,13 @@ import Foundation
     /// too, or every timer would wait for the clock to catch up.
     private func isWake(at time: Date) -> Bool {
         guard let last = lastTickAt else { return false }
-        return time < last || time.timeIntervalSince(last) > policy.wakeGap
+        return time < last || isLongGap(at: time)
+    }
+
+    /// A tick long after the last: the Mac slept.
+    private func isLongGap(at time: Date) -> Bool {
+        guard let last = lastTickAt else { return false }
+        return time.timeIntervalSince(last) > policy.wakeGap
     }
 
     /// Forgets the progress baseline and every timer; the next tick starts fresh.
