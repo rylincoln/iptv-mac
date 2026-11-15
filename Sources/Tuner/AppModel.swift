@@ -123,8 +123,12 @@ typealias ChannelSection = TunerCore.Section
         self.store = store
         importer = ImportService(store: store, session: Self.importSession())
         player = VLCPlayer()
+        // Timed by a clock that setting the wall clock cannot move, and that counts time asleep, so a
+        // sleep still shows as a gap. Used for nothing else: guide times, Recents and imports read the
+        // wall clock (`Date()`), since these dates drift from it once it is set.
+        let clock = ContinuousDate()
         supervisor = PlaybackSupervisor(
-            player: player, memory: BackgroundBufferMemory(store: store), now: Date.init)
+            player: player, memory: BackgroundBufferMemory(store: store), now: { clock.now() })
         importMessage = message
         leftoverSweep = Task.detached(priority: .utility) { ImportService.removeLeftoverFiles() }
         supervisor.onStatusChange = { [weak self] status in self?.statusChanged(status) }
