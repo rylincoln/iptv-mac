@@ -98,15 +98,17 @@ import Testing
     #expect(r.skippedCount == 1)
 }
 
+/// Named after the host alone: the path of a provider's URL often ends in the account's password.
 @Test func bareURLWithoutExtinfIsImported() {
     let r = M3UParser.parse("""
     #EXTM3U
-    https://example.invalid/live/stream42.m3u8
+    https://example.invalid/live/someuser/secret
     """)
     #expect(r.skippedCount == 0)
     #expect(r.channels.count == 1)
-    #expect(r.channels[0].name == "stream42.m3u8")
-    #expect(r.channels[0].streamURL == "https://example.invalid/live/stream42.m3u8")
+    #expect(r.channels[0].name == "example.invalid")
+    #expect(!r.channels[0].name.contains("secret"))
+    #expect(r.channels[0].streamURL == "https://example.invalid/live/someuser/secret")
 }
 
 @Test func nonURLLineIsSkipped() {

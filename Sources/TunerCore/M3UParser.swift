@@ -132,7 +132,7 @@ public enum M3UParser {
         }
         var name = entry?.title ?? ""
         if name.isEmpty { name = tvgName ?? "" }
-        if name.isEmpty { name = entry == nil ? lastPathComponent(of: url) : host(of: url) }
+        // Never a path segment: a provider's URL often ends in the account's user name and password.
         if name.isEmpty { name = host(of: url) }
         return ParsedChannel(
             name: name, tvgID: tvgID, tvgName: tvgName, logoURL: logo,
@@ -149,14 +149,5 @@ public enum M3UParser {
         if let at = rest.lastIndex(of: "@") { rest = rest[rest.index(after: at)...] }
         if !rest.hasPrefix("["), let colon = rest.lastIndex(of: ":") { rest = rest[rest.startIndex..<colon] }
         return String(rest)
-    }
-
-    private static func lastPathComponent(of url: String) -> String {
-        guard let r = url.range(of: "://") else { return "" }
-        var rest = url[r.upperBound...]
-        if let q = rest.firstIndex(where: { $0 == "?" || $0 == "#" }) { rest = rest[rest.startIndex..<q] }
-        guard let slash = rest.firstIndex(of: "/") else { return "" }
-        let path = rest[rest.index(after: slash)...]
-        return String(path.split(separator: "/").last ?? "")
     }
 }
