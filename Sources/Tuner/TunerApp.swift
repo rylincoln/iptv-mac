@@ -46,6 +46,10 @@ private struct MainWindow: View {
     @State private var columnsBeforeFullScreen = NavigationSplitViewVisibility.automatic
     /// ⌘F in video full screen: the search field takes the keyboard once the panes are back.
     @State private var searchFieldAfterFullScreen = false
+    /// The columns before the search field showed a hidden sidebar. Escape puts them back, unless the
+    /// owner has shown or hidden a column since, or the search ended some other way (see
+    /// `showSearchField`).
+    @State private var columnsBeforeSearch: NavigationSplitViewVisibility?
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columns) {
@@ -64,12 +68,20 @@ private struct MainWindow: View {
             } else if !model.searchText.isEmpty || focus == .search {
                 // Leaves the search: the channel list, kept in the window under the results, shows
                 // again with its section and selection. It is uncovered in this update, and can take
-                // focus only once that is done.
+                // focus only once that is done; a sidebar the search showed is hidden again with it.
                 model.searchText = ""
-                Task { focus = .channelList }
+                let restore = columnsBeforeSearch
+                columnsBeforeSearch = nil
+                Task {
+                    focus = .channelList
+                    if let restore { columns = restore }
+                }
             }
         }
         .onChange(of: model.searchFieldRequests) { showSearchField() }
+        .onChange(of: columns) { _, now in
+            if now != .all { columnsBeforeSearch = nil }  // the owner's own choice stands
+        }
         .onChange(of: videoFullScreen) { _, on in
             if on {
                 columnsBeforeFullScreen = columns
@@ -114,7 +126,15 @@ private struct MainWindow: View {
             videoFullScreen = false
             return
         }
-        if columns == .detailOnly || columns == .doubleColumn { columns = .all }
+        if columns == .detailOnly || columns == .doubleColumn {
+            columnsBeforeSearch = columns
+            columns = .all
+        } else if model.searchResults == nil {
+            // A new search, the sidebar already showing. If an earlier search showed it, that search
+            // ended some other way than Escape (a section chosen, the field cleared): the sidebar
+            // stays, and Escape this time leaves it.
+            columnsBeforeSearch = nil
+        }
         Task { focus = .search }
     }
 
