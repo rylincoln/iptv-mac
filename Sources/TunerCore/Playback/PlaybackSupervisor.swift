@@ -50,6 +50,7 @@ import Foundation
 
     public func play(streamURL: String) {
         let time = now()
+        noteClock(time)
         self.streamURL = streamURL
         failures = 0
         reconnectCount = 0
@@ -79,14 +80,17 @@ import Foundation
     /// Only meaningful from `.unavailable`.
     public func retry() {
         guard status == .unavailable, url != nil else { return }
+        let time = now()
+        noteClock(time)
         failures = 0
-        beginAttempt(.starting, at: now())
+        beginAttempt(.starting, at: time)
     }
 
     // MARK: Tick
 
     public func tick() {
         let time = now()
+        noteClock(time)
         defer { lastTickAt = time }
 
         switch status {
@@ -102,6 +106,8 @@ import Foundation
         if isWake(at: time) {
             if status == .starting || status == .playing {
                 forgetProgress(at: time)
+                // A play call waiting out its spacing is due by this clock, never by one set back.
+                if let due = nextPlayAt { nextPlayAt = min(due, earliest(time)) }
                 if status == .playing {
                     postWake = true  // the connection is probably dead; not the stream's fault
                     failures = 0
@@ -243,6 +249,14 @@ import Foundation
         return max(time, last.addingTimeInterval(Self.minPlaySpacing))
     }
 
+    /// Called with each reading of the clock. A previous play call stamped after `time` means the wall
+    /// clock has been set back since; how long ago that call really was is unknown, so it is taken as
+    /// just now. The one-second spacing then counts from `time` instead of waiting for the clock to
+    /// catch up, and is still at least a second of real time.
+    private func noteClock(_ time: Date) {
+        if let last = lastPlayAt, last > time { lastPlayAt = time }
+    }
+
     // MARK: Buffer
 
     /// No step is above the buffer in force, so stepping up would not change it.
@@ -265,9 +279,11 @@ import Foundation
 
     // MARK: Bookkeeping
 
+    /// A tick long after the last, or one stamped before it: a wall clock set back is read as a wake
+    /// too, or every timer would wait for the clock to catch up.
     private func isWake(at time: Date) -> Bool {
         guard let last = lastTickAt else { return false }
-        return time.timeIntervalSince(last) > policy.wakeGap
+        return time < last || time.timeIntervalSince(last) > policy.wakeGap
     }
 
     /// Forgets the progress baseline and every timer; the next tick starts fresh.

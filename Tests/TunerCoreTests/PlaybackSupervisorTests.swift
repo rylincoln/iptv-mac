@@ -9,11 +9,18 @@ private let urlB = "http://example.invalid/b"
 
 @MainActor final class TestClock {
     var now = Date(timeIntervalSince1970: 1_800_000_000)
+    /// The total by which the wall clock has been set (`setWallClock`), as opposed to time passing.
+    private(set) var adjustment: TimeInterval = 0
     func advance(_ seconds: TimeInterval) { now = now.addingTimeInterval(seconds) }
+    /// Sets the wall clock back (negative) or forward, with no time passing.
+    func setWallClock(by seconds: TimeInterval) {
+        now = now.addingTimeInterval(seconds)
+        adjustment += seconds
+    }
 }
 
 @MainActor final class FakePlayer: Player {
-    struct PlayCall { var url: URL; var bufferMs: Int; var at: Date }
+    struct PlayCall { var url: URL; var bufferMs: Int; var at: Date; var adjustment: TimeInterval }
     let clock: TestClock
     var plays: [PlayCall] = []
     var stopCount = 0
@@ -24,11 +31,13 @@ private let urlB = "http://example.invalid/b"
     init(clock: TestClock) { self.clock = clock }
 
     func play(url: URL, bufferMs: Int) {
-        // Shared recorder: every test in this file fails if a URL is replayed within one second.
-        if let last = plays.last(where: { $0.url == url }), clock.now.timeIntervalSince(last.at) < 1 {
+        // Shared recorder: every test in this file fails if a URL is replayed within one second of
+        // real time (the wall clock's difference, less any setting of the clock in between).
+        if let last = plays.last(where: { $0.url == url }),
+           clock.now.timeIntervalSince(last.at) - (clock.adjustment - last.adjustment) < 1 {
             Issue.record("play(url:) called twice for the same URL within one second")
         }
-        plays.append(PlayCall(url: url, bufferMs: bufferMs, at: clock.now))
+        plays.append(PlayCall(url: url, bufferMs: bufferMs, at: clock.now, adjustment: clock.adjustment))
     }
 
     func stop() { stopCount += 1 }
@@ -106,12 +115,15 @@ final class FakeMemory: BufferMemory, @unchecked Sendable {
     }
 }
 
+/// The shortest real time between two play calls for the same URL.
 @MainActor func minSpacingPerURL(_ plays: [FakePlayer.PlayCall]) -> TimeInterval {
     var minimum = TimeInterval.infinity
-    var lastByURL: [URL: Date] = [:]
+    var lastByURL: [URL: FakePlayer.PlayCall] = [:]
     for call in plays {
-        if let last = lastByURL[call.url] { minimum = min(minimum, call.at.timeIntervalSince(last)) }
-        lastByURL[call.url] = call.at
+        if let last = lastByURL[call.url] {
+            minimum = min(minimum, call.at.timeIntervalSince(last.at) - (call.adjustment - last.adjustment))
+        }
+        lastByURL[call.url] = call
     }
     return minimum
 }
@@ -480,6 +492,71 @@ final class FakeMemory: BufferMemory, @unchecked Sendable {
         let before = rig.player.plays.count
         rig.tick()
         #expect(rig.player.plays.count == before + 1)
+    }
+
+    @Test func clockSetBackWhilePlayingStillCatchesAStall() {
+        let rig = Rig()
+        rig.startPlaying()
+        rig.clock.setWallClock(by: -3600)
+        rig.tick(state: .playing)  // read as a wake: nothing counted
+        #expect(rig.status == .playing)
+        #expect(rig.supervisor.reconnectCount == 0)
+        rig.run(3, state: .playing)
+        #expect(rig.status == .playing)
+        rig.tick(state: .playing)  // 4 s frozen since the clock was set back
+        #expect(rig.status == .reconnecting(attempt: 1))
+        rig.tick()
+        #expect(rig.player.plays.count == 2)
+        #expect(minSpacingPerURL(rig.player.plays) >= 1)
+    }
+
+    @Test func clockSetBackMidRetryDoesNotPostponeTheRetry() {
+        let rig = Rig()
+        rig.supervisor.play(streamURL: urlA)
+        rig.run(12, state: .opening)
+        #expect(rig.status == .reconnecting(attempt: 1))
+        rig.clock.setWallClock(by: -3600)
+        rig.tick(state: .opening)  // read as a wake: attempt 1 again, a second from now
+        #expect(rig.status == .reconnecting(attempt: 1))
+        #expect(rig.player.plays.count == 1)
+        rig.tick(state: .opening)
+        #expect(rig.player.plays.count == 2)
+        // Sustained failure still ends in "unavailable", and then nothing more is opened.
+        var guardTicks = 0
+        while rig.status != .unavailable && guardTicks < 1000 { rig.tick(state: .opening); guardTicks += 1 }
+        #expect(rig.status == .unavailable)
+        let plays = rig.player.plays.count
+        rig.run(120, state: .opening)
+        #expect(rig.player.plays.count == plays)
+        #expect(minSpacingPerURL(rig.player.plays) >= 1)
+    }
+
+    @Test func clockSetBackWhileAPlayIsDeferredDoesNotPostponeIt() {
+        let rig = Rig()
+        rig.supervisor.play(streamURL: urlA)
+        rig.supervisor.stop()
+        rig.supervisor.play(streamURL: urlA)  // same instant: deferred by a second
+        #expect(rig.player.plays.count == 1)
+        rig.clock.setWallClock(by: -3600)
+        rig.tick(after: 0.5)  // read as a wake: the play is due a second from now
+        rig.tick(after: 0.5)
+        #expect(rig.player.plays.count == 1)
+        rig.tick(after: 0.5)
+        #expect(rig.player.plays.count == 2)
+        #expect(rig.status == .starting)
+        #expect(minSpacingPerURL(rig.player.plays) >= 1)
+    }
+
+    @Test func sameChannelPlayedAgainAfterTheClockWasSetBackIsNotPostponed() {
+        let rig = Rig()
+        rig.startPlaying()
+        rig.supervisor.stop()
+        rig.clock.setWallClock(by: -3600)
+        rig.supervisor.play(streamURL: urlA)  // a second after the last play by the clock now
+        #expect(rig.player.plays.count == 1)
+        rig.tick()
+        #expect(rig.player.plays.count == 2)
+        #expect(minSpacingPerURL(rig.player.plays) >= 1)
     }
 
     @Test func playNewChannelAbandonsPendingRetry() {
