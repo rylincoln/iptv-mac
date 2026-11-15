@@ -494,13 +494,14 @@ typealias ChannelSection = TunerCore.Section
         }
     }
 
-    /// Keeps the selection when the selected channel is still listed, following it by stream URL when
-    /// a refresh gave it a new id.
+    /// Keeps the selection on the same channel, judged by stream URL: an import reassigns ids, so an
+    /// id that is still listed may now name a different channel.
     private func apply(rows newRows: [ChannelRow]) {
         let selected = selectedChannelID.flatMap { id in rows.first { $0.id == id } }
         rows = newRows
         refreshPlayingChannel(from: newRows)
-        guard let selected, !newRows.contains(where: { $0.id == selected.id }) else { return }
+        guard let selected else { return }
+        if newRows.contains(where: { $0.id == selected.id && $0.streamURL == selected.streamURL }) { return }
         selectedChannelID = newRows.first { $0.streamURL == selected.streamURL }?.id
     }
 
