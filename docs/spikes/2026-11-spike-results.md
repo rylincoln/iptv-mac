@@ -63,3 +63,7 @@ Run 2026-11-14 on macOS 27.2, Apple silicon, Command Line Tools only (no Xcode),
 - **Not tested.** The owner chose to skip the Wi-Fi off/on run. What VLCKit reports during a network drop (state changes, frozen counters, self-recovery) is unknown, so the watchdog starts from the plan's default thresholds and is calibrated by hand in Task 15's Wi-Fi checks.
 
 **Fallback rules:** VLCKit 3.x links, renders and plays, so VLCKit 4 was not tried and nothing was built from source.
+
+## Apple TV (deferred)
+
+Every probed stream is raw MPEG-TS over HTTP, not HLS, so Apple's player (and therefore AirPlay external playback) is **unlikely** to accept these streams as they are. This has not been tested: no Apple TV was available. Expect the later Apple TV work to need either a local HLS repackaging step or the Screen Mirroring fallback.
