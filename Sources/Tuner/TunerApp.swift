@@ -2,15 +2,10 @@ import AppKit
 import SwiftUI
 import TunerCore
 
-// In the macOS 27 SDK the `@State` attribute is a macro whose plugin ships only with Xcode, so this
-// target cannot use it. `State(initialValue:)` is the same storage, declared by hand.
-
 @main
 struct TunerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    private var modelState = State(initialValue: AppModel.open())
-
-    private var model: AppModel? { modelState.wrappedValue }
+    @State private var model = AppModel.open()
 
     var body: some Scene {
         // One window: there is one player and one video view.
@@ -128,12 +123,12 @@ private struct SourceURLSheet: View {
     let kind: SourceKind
     let add: (String) -> Void
     @Environment(\.dismiss) private var dismiss
-    private var textState = State(initialValue: "")
+    @State private var text = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(kind == .playlist ? "Add Playlist URL" : "Add Guide URL").font(.headline)
-            TextField("http://", text: textState.projectedValue)
+            TextField("http://", text: $text)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 440)
                 .onSubmit(submit)
@@ -151,7 +146,7 @@ private struct SourceURLSheet: View {
 
     /// The trimmed text when it is an http(s) URL with a host.
     private var location: String? {
-        let trimmed = textState.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let lower = trimmed.lowercased()
         guard lower.hasPrefix("http://") || lower.hasPrefix("https://"),
               let host = URL(string: trimmed)?.host, !host.isEmpty
