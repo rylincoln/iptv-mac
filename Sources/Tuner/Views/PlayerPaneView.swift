@@ -90,7 +90,7 @@ private struct PlaybackStatusOverlay: View {
             ProgressView()
                 .controlSize(.small)
                 .padding(10)
-                .background(.black.opacity(0.5), in: Circle())
+                .glassEffect(.regular, in: .circle)
                 .environment(\.colorScheme, .dark)
                 .accessibilityLabel("Starting")
                 .allowsHitTesting(false)
@@ -103,7 +103,8 @@ private struct PlaybackStatusOverlay: View {
                         .foregroundStyle(.white)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
-                        .background(.black.opacity(0.65), in: Capsule())
+                        .glassEffect()
+                        .environment(\.colorScheme, .dark)
                         .accessibilityLabel("Reconnecting")
                 }
                 Spacer()
@@ -116,10 +117,11 @@ private struct PlaybackStatusOverlay: View {
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(.white)
                 Button("Try Again") { model.retry() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
             }
             .padding(24)
-            .background(.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 12))
+            .glassEffect(.regular, in: .rect(cornerRadius: 12))
+            .environment(\.colorScheme, .dark)
         }
     }
 }
