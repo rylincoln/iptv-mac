@@ -616,6 +616,26 @@ extension PlaybackSupervisorTests {
         #expect(rig.player.plays.last?.bufferMs == 1000)
     }
 
+    /// The third rebuffer lands on the first tick with progress since the wake: the stream came
+    /// through the sleep, so the storm is a stutter and steps the buffer up.
+    @Test func rebufferStormCompletedOnTheFirstProgressAfterAWakeIsAStutter() {
+        let rig = Rig()
+        rig.startPlaying()
+        rig.clock.advance(7200)
+        rig.player.state = .playing
+        rig.supervisor.tick()
+        for _ in 1...2 {
+            rig.tick(after: 0.5, state: .buffering)
+            rig.tick(after: 0.5, state: .playing)
+        }
+        rig.tick(after: 0.5, progress: true, state: .buffering)
+        #expect(rig.status == .reconnecting(attempt: 1))
+        #expect(rig.memory.bufferMs(forStreamURL: urlA) == 2000)
+        rig.tick()
+        #expect(rig.player.plays.count == 2)
+        #expect(rig.player.plays.last?.bufferMs == 2000)
+    }
+
     @Test func rebufferStormAfterPostWakeProgressIsStillAStutter() {
         let rig = Rig()
         rig.startPlaying()

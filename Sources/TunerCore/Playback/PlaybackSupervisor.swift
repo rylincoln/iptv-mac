@@ -163,8 +163,9 @@ import Foundation
 
         if status == .playing, wasPlaying, state == .buffering, noteRebuffer(at: time) {
             guard isAtTopBufferStep else {
-                // Woken with no progress since: the sleep's doing, as a stall would be, not the buffer's.
-                fail(postWake ? .lostInSleep : .stutter, at: time)
+                // Woken with no progress since, this tick included: the sleep's doing, as a stall would
+                // be, not the buffer's. (`postWake` is cleared by this tick's progress only further on.)
+                fail(postWake && !progressed ? .lostInSleep : .stutter, at: time)
                 return
             }
             // A restart could not add buffer here; it would only cost a connection and an attempt.
