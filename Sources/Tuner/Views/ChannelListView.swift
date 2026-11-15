@@ -53,16 +53,36 @@ private struct ChannelList: View, Equatable {
     let covered: Bool
     var focus: FocusState<PaneFocus?>.Binding
 
+    /// Where the selection was when the list was covered. A plain reference, so noting it is not
+    /// itself a change to the view.
+    @State private var whenCovered = CoveredSelection()
+
     /// The model is the window's one model for its whole life, and the focus binding never changes.
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.covered == rhs.covered }
 
     var body: some View {
+        ScrollViewReader { proxy in
+            coverable(proxy: proxy)
+        }
+    }
+
+    private func coverable(proxy: ScrollViewProxy) -> some View {
         list
             .opacity(covered ? 0 : 1)
             .focusable(!covered, interactions: [])
             .allowsHitTesting(!covered)
             .accessibilityHidden(covered)
             .onChange(of: covered) { _, isCovered in
+                // The list keeps its scroll position while covered, so it comes back as it was. If the
+                // selection moved meanwhile (a favourite removed from the section shown, an import
+                // giving the channel a new id), the selected row is brought into view: the least
+                // scroll that shows it, none if it already shows. On the next turn, never during
+                // the table's update.
+                if isCovered {
+                    whenCovered.anchor = selectionAnchor
+                } else if selectionAnchor != whenCovered.anchor, let id = model.selectedChannelID {
+                    Task { proxy.scrollTo(id) }
+                }
                 // Covered while it had the keyboard (results came in, or the library proved empty):
                 // the keyboard goes to the results, or nowhere. Uncovered with nothing focused (the
                 // first import, a section chosen while searching): to the list, as when it first
@@ -134,6 +154,12 @@ private struct ChannelList: View, Equatable {
     /// Keys a covered list passes on: Escape (leave the search) and Tab and Shift-Tab (move on).
     private static let passedOn: Set<Character> = ["\u{1B}", "\t", "\u{19}"]
 
+    /// The selected channel and its row. Read only when the list is covered or uncovered.
+    private var selectionAnchor: SelectionAnchor {
+        let id = model.selectedChannelID
+        return SelectionAnchor(id: id, row: id.flatMap { id in model.rows.firstIndex { $0.id == id } })
+    }
+
     /// The one listed channel the ids name, if they name exactly one.
     private func channel(in ids: Set<Int64>) -> ChannelRow? {
         guard ids.count == 1, let id = ids.first else { return nil }
@@ -147,6 +173,15 @@ private struct ChannelList: View, Equatable {
         case .sports, .all, .group: return "No channels"
         }
     }
+}
+
+private struct SelectionAnchor: Equatable {
+    var id: Int64?
+    var row: Int?
+}
+
+private final class CoveredSelection {
+    var anchor: SelectionAnchor?
 }
 
 extension View {
