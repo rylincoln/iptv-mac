@@ -15,7 +15,6 @@ struct MainWindow: View {
     /// The player pane alone, filling the screen.
     @State private var videoFullScreen = false
     @State private var columns = NavigationSplitViewVisibility.automatic
-    @State private var columnsBeforeFullScreen = NavigationSplitViewVisibility.automatic
     /// ⌘F in video full screen: the search field takes the keyboard once the panes are back.
     @State private var searchFieldAfterFullScreen = false
     /// The columns before the search field showed a hidden sidebar; Escape puts them back. Forgotten
@@ -32,7 +31,22 @@ struct MainWindow: View {
             ChannelListView(model: model, focus: $focus)
                 .navigationSplitViewColumnWidth(min: 240, ideal: 320, max: 520)
         } detail: {
-            PlayerPaneView(model: model, isFullScreen: $videoFullScreen, focus: $focus)
+            // Only marks where the player pane goes; the pane itself is laid over the window (below).
+            Color.clear.anchorPreference(key: PlayerPaneFrame.self, value: .bounds) { $0 }
+        }
+        // The player pane sits above the columns, over the detail column's place, and over the whole
+        // window when the video has it alone. macOS will not hide a split view's middle column, so the
+        // video cannot be left alone by hiding columns; and placed this way the video's view never
+        // changes parent, in or out of full screen.
+        .overlayPreferenceValue(PlayerPaneFrame.self) { anchor in
+            GeometryReader { proxy in
+                let whole = CGRect(origin: .zero, size: proxy.size)
+                let frame = videoFullScreen ? whole : anchor.map { proxy[$0] } ?? whole
+                PlayerPaneView(model: model, isFullScreen: $videoFullScreen, focus: $focus)
+                    .frame(width: frame.width, height: frame.height)
+                    .offset(x: frame.minX, y: frame.minY)
+            }
+            .ignoresSafeArea(edges: videoFullScreen ? .all : [])
         }
         .toolbar(videoFullScreen ? .hidden : .automatic, for: .windowToolbar)
         .onExitCommand {
@@ -70,11 +84,8 @@ struct MainWindow: View {
         }
         .onChange(of: videoFullScreen) { _, on in
             if on {
-                columnsBeforeFullScreen = columns
-                columns = .detailOnly
                 focus = .player
             } else {
-                columns = columnsBeforeFullScreen
                 if searchFieldAfterFullScreen {
                     searchFieldAfterFullScreen = false
                     showSearchField()
@@ -144,4 +155,12 @@ struct MainWindow: View {
 private struct SourcePrompt: Identifiable {
     let kind: SourceKind
     var id: SourceKind { kind }
+}
+
+/// Where the detail column is, for the player pane laid over it.
+private struct PlayerPaneFrame: PreferenceKey {
+    static let defaultValue: Anchor<CGRect>? = nil
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = nextValue() ?? value
+    }
 }
