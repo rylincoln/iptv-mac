@@ -439,6 +439,17 @@ struct PerformanceTests {
         #expect(ms < 1000)
     }
 
+    @Test func largePlaylistParsesQuickly() {
+        var text = "#EXTM3U\n"
+        for i in 0..<4000 {
+            text += "#EXTINF:-1 tvg-id=\"id\(i)\" tvg-name=\"Name \(i)\" tvg-logo=\"https://example.invalid/\(i).png\" group-title=\"G\(i % 20)\",Name \(i)\nhttps://example.invalid/live/\(i)\n"
+        }
+        var result = M3UParseResult(channels: [], skippedCount: 0)
+        let ms = time("playlistParse 4000 channels") { result = M3UParser.parse(text) }
+        #expect(result.channels.count == 4000)
+        #expect(ms < 100)
+    }
+
     @Test func guideImportUnderTenSeconds() throws {
         let f = try fixture()
         let store = try f.freshStore("guide")

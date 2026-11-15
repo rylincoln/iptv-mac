@@ -149,14 +149,5 @@ import Testing
     #expect(r.skippedCount == 0)
 }
 
-@Test func largePlaylistParsesQuickly() {
-    var text = "#EXTM3U\n"
-    for i in 0..<4000 {
-        text += "#EXTINF:-1 tvg-id=\"id\(i)\" tvg-name=\"Name \(i)\" tvg-logo=\"https://example.invalid/\(i).png\" group-title=\"G\(i % 20)\",Name \(i)\nhttps://example.invalid/live/\(i)\n"
-    }
-    let clock = ContinuousClock()
-    var result = M3UParseResult(channels: [], skippedCount: 0)
-    let elapsed = clock.measure { result = M3UParser.parse(text) }
-    #expect(result.channels.count == 4000)
-    #expect(elapsed < .milliseconds(100))
-}
+// The parse speed check is in PerformanceTests (`largePlaylistParsesQuickly`), which runs in a
+// release build only.
