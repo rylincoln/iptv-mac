@@ -23,6 +23,7 @@ struct PlayerPaneView: View {
                 .padding(.leading, model.showsChannelList ? Self.drawerWidth : 0)
             drawer
         }
+        .overlay(alignment: .bottomTrailing) { PictureButton(model: model, idle: idle) }
         .overlay(alignment: .topTrailing) {
             if model.showsStats { StatsOverlay(readout: model.statsReadout).padding(.top, topInset) }
         }
@@ -231,6 +232,43 @@ private struct InfoCard: View {
     /// Local time, in the Mac's own format.
     private func time(_ date: Date) -> String {
         date.formatted(date: .omitted, time: .shortened)
+    }
+}
+
+/// Over the video's bottom corner while the pointer moves, as the card is: makes the window the
+/// small floating picture, or brings it back. Only while something plays. It alone watches the idle
+/// state.
+private struct PictureButton: View {
+    let model: AppModel
+    let idle: IdleWatch
+
+    var body: some View {
+        let small = model.pictureInPicture
+        let visible = !idle.isIdle && (small || model.playingChannel != nil)
+        ZStack {
+            if visible {
+                Button {
+                    model.send(.togglePictureInPicture)
+                } label: {
+                    Image(systemName: small ? "pip.exit" : "pip.enter")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(.white)
+                        .frame(width: 36, height: 36)
+                        .background(.black.opacity(0.8), in: Circle())
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help(small ? "Exit Picture in Picture" : "Picture in Picture")
+                .accessibilityLabel(small ? "Exit Picture in Picture" : "Picture in Picture")
+                // The pointer over the button is still the pointer moving over the video.
+                .onContinuousHover { phase in
+                    if case .active = phase { idle.pointerMoved() }
+                }
+                .padding(small ? 10 : 20)
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.25), value: visible)
     }
 }
 
