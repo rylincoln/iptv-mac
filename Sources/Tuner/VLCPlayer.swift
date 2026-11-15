@@ -9,14 +9,13 @@ import VLCKit
 /// advancing, `.buffering` only when VLCKit says buffering and nothing has advanced since the
 /// previous reading, and `.ended` / `.error` as VLCKit reports them.
 ///
-/// VLCKit delivers its events on the main queue, and stops a stream and swaps media asynchronously
-/// (`libvlc_media_player_stop_async`, `libvlc_media_player_set_media_async`), so events from the
-/// stream being left can still arrive after `play` returns, some after the new stream's own. Each
-/// `play` queues a fence behind the events already queued and ignores them; after it, nothing but an
-/// Opening is taken until this play call has opened. What is left: on a very fast change of channel
-/// the previous stream's own Opening can come late and be taken for this one's. Statistics read
-/// before this stream has its input are then garbage (the bitrate is sanitised regardless) until the
-/// stream opens, a few milliseconds later.
+/// VLCKit queues its events straight onto the main queue. Stopping a stream
+/// (`libvlc_media_player_stop_async`) detaches that stream's event callbacks before it returns, so
+/// every event of the stream being left is already queued when `play` starts the next, but some are
+/// not yet delivered. Each `play` queues a fence behind them and ignores everything before it. After
+/// the fence, nothing but an Opening is taken until this play call has opened: with this libVLC no
+/// event of the stream being left gets that far, and the rule is there in case a later one lets one
+/// through.
 @MainActor final class VLCPlayer: NSObject, Player {
     let videoView: NSView
 
