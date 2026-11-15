@@ -39,12 +39,12 @@ extension SearchResults {
     }
 }
 
-private extension ProgrammeHit {
+extension ProgrammeHit {
     var onNowID: SearchResultID { .onNow(programmeID: programme.id, channelID: channel.id) }
     var laterID: SearchResultID { .later(programmeID: programme.id, channelID: channel.id) }
 }
 
-private extension ChannelRow {
+extension ChannelRow {
     var resultID: SearchResultID { .channel(id) }
 }
 
