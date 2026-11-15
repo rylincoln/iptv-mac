@@ -114,11 +114,13 @@ private func parseXML(_ xml: String) throws -> Collected {
     #expect(r.programmes.count == 1)
     #expect(r.programmes[0].title == "Good")
     #expect(r.summary.programmes == 1)
+    #expect(!r.summary.complete)
 }
 
 @Test func emptyTvElement() throws {
     let r = try parseXML("<tv></tv>")
     #expect(r.summary == XMLTVSummary(channels: 0, programmes: 0, skipped: 0))
+    #expect(r.summary.complete)
 }
 
 @Test func missingFileThrows() {

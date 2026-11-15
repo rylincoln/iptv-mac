@@ -84,11 +84,15 @@ public struct XMLTVSummary: Equatable, Sendable {
     public var programmes: Int
     /// Channels without an id and programmes that are missing a channel, title or valid times.
     public var skipped: Int
+    /// The document parsed to its end. False when the XML broke part way, such as a file cut off
+    /// mid-download: what came before the break was still delivered.
+    public var complete: Bool
 
-    public init(channels: Int, programmes: Int, skipped: Int) {
+    public init(channels: Int, programmes: Int, skipped: Int, complete: Bool = true) {
         self.channels = channels
         self.programmes = programmes
         self.skipped = skipped
+        self.complete = complete
     }
 }
 

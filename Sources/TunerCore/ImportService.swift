@@ -34,7 +34,7 @@ public struct ImportService: Sendable {
             let result = M3UParser.parse(text)
             guard !result.channels.isEmpty else { throw ImportError.notAPlaylist }
             try store.replaceChannels(sourceID: sourceID, with: result.channels)
-            return (result.channels.count, result.skippedCount)
+            return (result.channels.count, result.skippedCount, true)
         }
     }
 
@@ -64,14 +64,18 @@ public struct ImportService: Sendable {
                 // Thrown inside the transaction so the old guide stays.
                 if summary.channels == 0 && summary.programmes == 0 { throw ImportError.notAGuide }
             }
-            return (summary.programmes, summary.skipped)
+            // A guide cut off part way keeps what parsed, but not its ETag: a later refresh must
+            // download it whole, not be told it is unchanged.
+            return (summary.programmes, summary.skipped, summary.complete)
         }
     }
 
     // MARK: - Shared flow
 
+    /// `work` loads the fetched file and says whether it read all of it; only then is the response's
+    /// ETag kept.
     private func run(
-        sourceID: Int64, work: (URL) throws -> (items: Int, skipped: Int)
+        sourceID: Int64, work: (URL) throws -> (items: Int, skipped: Int, complete: Bool)
     ) async throws -> ImportOutcome {
         guard let source = try store.sources().first(where: { $0.id == sourceID }) else {
             throw ImportError.unreadable
@@ -85,10 +89,10 @@ public struct ImportService: Sendable {
                     skippedCount: source.skippedCount, error: nil, at: now())
                 return .notModified
             }
-            let (items, skipped) = try work(file)
+            let (items, skipped, complete) = try work(file)
             try store.recordRefresh(
-                sourceID: sourceID, etag: fetched.etag, itemCount: items, skippedCount: skipped,
-                error: nil, at: now())
+                sourceID: sourceID, etag: complete ? fetched.etag : nil, itemCount: items,
+                skippedCount: skipped, error: nil, at: now())
             return .imported(items: items, skipped: skipped)
         } catch is CancellationError {
             throw CancellationError()

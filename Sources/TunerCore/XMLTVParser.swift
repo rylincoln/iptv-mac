@@ -43,7 +43,8 @@ public enum XMLTVTime {
 
 public enum XMLTVParser {
     /// Streams the file; never holds the whole document in memory. Throws only if the file cannot be opened
-    /// or the XML is broken before any element was delivered; a truncated tail ends the parse with what was read.
+    /// or the XML is broken before any element was delivered; a truncated tail ends the parse with what was
+    /// read, and a summary that is not `complete`.
     public static func parse(fileAt url: URL,
                              onChannel: (ParsedGuideChannel) throws -> Void,
                              onProgramme: (ParsedProgramme) throws -> Void) throws -> XMLTVSummary {
@@ -61,10 +62,11 @@ public enum XMLTVParser {
                 parser.delegate = delegate
                 let ok = parser.parse()
                 if let error = delegate.callbackError { throw error }
-                let summary = delegate.summary
+                var summary = delegate.summary
                 if !ok, summary.channels + summary.programmes + summary.skipped == 0 {
                     throw parser.parserError ?? CocoaError(.fileReadCorruptFile)
                 }
+                summary.complete = ok
                 return summary
             }
         }

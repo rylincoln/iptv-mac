@@ -165,6 +165,29 @@ private func expectGuideInStore(_ store: Store) throws {
         try expectGuideInStore(store)
     }
 
+    @Test func truncatedGuideKeepsWhatParsedButNotItsETag() async throws {
+        let store = try Store.inMemory()
+        let full = guideXML()
+        let cut = try #require(full.range(of: "<title>No stop"))
+        let truncated = Data(full[..<cut.upperBound].utf8)
+        StubProtocol.route("/guide-cut") { _ in StubResponse(headers: ["ETag": "\"v1\""], body: truncated) }
+        let id = try store.addSource(kind: .guide, location: "https://example.invalid/guide-cut")
+        let outcome = try await service(store, session: stubSession()).importGuide(sourceID: id)
+        #expect(outcome == .imported(items: 1, skipped: 0))
+        try expectGuideInStore(store)
+        #expect(try source(store, id).etag == nil)
+
+        // The next refresh asks for the whole guide again rather than being told it is unchanged.
+        let whole = Data(full.utf8)
+        StubProtocol.route("/guide-cut") { request in
+            if request.value(forHTTPHeaderField: "If-None-Match") != nil { return StubResponse(status: 304) }
+            return StubResponse(headers: ["ETag": "\"v2\""], body: whole)
+        }
+        let again = try await service(store, session: stubSession()).importGuide(sourceID: id)
+        #expect(again == .imported(items: 1, skipped: 1))
+        #expect(try source(store, id).etag == "\"v2\"")
+    }
+
     @Test func sendsIfNoneMatchAndHandles304() async throws {
         let store = try Store.inMemory()
         let body = Data(playlistText.utf8)
