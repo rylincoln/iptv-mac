@@ -12,10 +12,11 @@ BIN="$(swift build -c release --show-bin-path)"
 
 APP="$ROOT/build/Tuner.app"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$APP/Contents/Resources"
 
 cp "$BIN/Tuner" "$APP/Contents/MacOS/Tuner"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
+cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"  # drawn by scripts/make-icon.sh
 ditto "$BIN/VLCKit.framework" "$APP/Contents/Frameworks/VLCKit.framework"
 
 RPATH="@executable_path/../Frameworks"
