@@ -7,3 +7,4 @@ sample_files/
 .build/
 DerivedData/
 xcuserdata/
+Vendor/
