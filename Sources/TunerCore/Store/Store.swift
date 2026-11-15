@@ -10,7 +10,12 @@ public final class Store: Sendable {
         let url = URL(fileURLWithPath: path)
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        db = try DatabasePool(path: path)   // WAL journal mode
+        var configuration = Configuration()
+        // A bulk import is one big transaction. By default SQLite keeps its dirty pages in memory
+        // until about 20,000 of them (80 MB) pile up; spill to the journal early so an import's
+        // memory stays flat however large the guide is.
+        configuration.prepareDatabase { db in try db.execute(sql: "PRAGMA cache_spill = 1000") }
+        db = try DatabasePool(path: path, configuration: configuration)   // WAL journal mode
         try Self.migrator.migrate(db)
     }
 
