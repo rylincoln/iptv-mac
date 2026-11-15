@@ -468,15 +468,16 @@ typealias ChannelSection = TunerCore.Section
         }
     }
 
+    /// A failed read keeps what is shown.
     private func reloadRows(selectingFirst: Bool = false) {
         rowsLoad?.cancel()
         let section = currentSection
         let store = self.store
         rowsLoad = Task {
             let loaded = await Task.detached(priority: .userInitiated) {
-                (try? store.channels(in: section, at: Date())) ?? []
+                try? store.channels(in: section, at: Date())
             }.value
-            guard !Task.isCancelled, section == currentSection else { return }
+            guard !Task.isCancelled, section == currentSection, let loaded else { return }
             apply(rows: loaded)
             if selectingFirst, selectedChannelID == nil { selectedChannelID = loaded.first?.id }
         }
@@ -502,12 +503,13 @@ typealias ChannelSection = TunerCore.Section
         if row.guideRef != playing.guideRef { reloadUpNext() }
     }
 
+    /// A failed read keeps what is shown, so it never puts the first-run prompt over a full library.
     private func reloadHasChannels() {
         let store = self.store
         Task {
-            hasChannels = await Task.detached(priority: .userInitiated) {
-                ((try? store.sources()) ?? []).contains { $0.kind == .playlist && $0.itemCount > 0 }
-            }.value
+            let sources = await Task.detached(priority: .userInitiated) { try? store.sources() }.value
+            guard let sources else { return }
+            hasChannels = sources.contains { $0.kind == .playlist && $0.itemCount > 0 }
         }
     }
 
