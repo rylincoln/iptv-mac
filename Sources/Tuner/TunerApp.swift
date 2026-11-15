@@ -282,6 +282,8 @@ private final class WindowBridgeView: NSView {
 
 // MARK: - Sources
 
+/// One import runs at a time, and a request made meanwhile is not queued: while one runs, these items
+/// are disabled and the last of them reads "Importing…" to say why.
 private struct SourceCommands: Commands {
     let model: AppModel?
 
@@ -294,7 +296,7 @@ private struct SourceCommands: Commands {
                 Button("Add Playlist URL…") { model?.sourcePrompt = .playlist }
                 Button("Add Guide URL…") { model?.sourcePrompt = .guide }
                 Divider()
-                Button("Refresh Sources") {
+                Button(model?.isImporting == true ? "Importing…" : "Refresh Sources") {
                     if let model { Task { await model.refreshAll() } }
                 }
                 .keyboardShortcut("r", modifiers: .command)
