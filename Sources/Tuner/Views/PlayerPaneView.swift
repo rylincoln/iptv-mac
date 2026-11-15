@@ -149,7 +149,8 @@ private struct FullScreenBanner: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
-                .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 12))
+                .glassEffect(.regular, in: .rect(cornerRadius: 12))
+                .environment(\.colorScheme, .dark)  // the video behind is dark more often than not
                 .padding(24)
                 .transition(.opacity)
                 .accessibilityElement(children: .combine)
