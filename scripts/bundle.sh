@@ -17,6 +17,8 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$APP/Contents/Resourc
 cp "$BIN/Tuner" "$APP/Contents/MacOS/Tuner"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"  # drawn by scripts/make-icon.sh
+# The bundle carries VLCKit, so the LGPL and the notices travel with it.
+cp LICENSE THIRD-PARTY-NOTICES.md LICENSES/LGPL-2.1.txt "$APP/Contents/Resources/"
 ditto "$BIN/VLCKit.framework" "$APP/Contents/Frameworks/VLCKit.framework"
 
 RPATH="@executable_path/../Frameworks"

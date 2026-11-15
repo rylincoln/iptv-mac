@@ -7,6 +7,12 @@ manages itself.
 Requires macOS 26 or later and a Swift 6.2 or later toolchain. There is no Xcode project; it is a
 Swift package.
 
+## Install
+
+Download `Tuner-<version>-macos-arm64.zip` from the Releases page, unzip it and move `Tuner.app` to
+Applications. Apple silicon only. The app is not notarised, so the first time, Control-click it,
+choose Open, and confirm (or allow it under System Settings > Privacy & Security).
+
 ## Build
 
 ```sh
