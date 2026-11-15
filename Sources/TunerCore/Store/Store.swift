@@ -124,6 +124,22 @@ public final class Store: Sendable {
         return migrator
     }
 
+    // MARK: Times
+
+    /// The furthest a stored time may lie either side of 1970, in seconds: about 140 million years,
+    /// far past any real time, and far enough inside `Int64` that the store's own arithmetic on a time
+    /// (a week ahead, a day back) never overflows.
+    static let unixSecondsLimit: Int64 = 1 << 52
+
+    /// Whole seconds since 1970, as every time is stored and compared. Never traps: a time that is not a
+    /// number is 0, and one beyond `unixSecondsLimit` either way, an infinity included, is held there.
+    static func unixSeconds(_ date: Date, rounding rule: FloatingPointRoundingRule = .towardZero) -> Int64 {
+        let seconds = date.timeIntervalSince1970.rounded(rule)
+        guard !seconds.isNaN else { return 0 }
+        let limit = Double(unixSecondsLimit)
+        return Int64(min(max(seconds, -limit), limit))
+    }
+
     // MARK: Playback memory
 
     /// Remembered buffer for a stream, or nil when none is stored or the read fails.

@@ -56,8 +56,8 @@ extension Store {
                 UPDATE source SET etag = ?, itemCount = ?, skippedCount = ?, lastError = ?,
                     lastRefreshAt = ?, retryAt = ? WHERE id = ?
                 """, arguments: [
-                    etag, itemCount, skippedCount, error, Int64(at.timeIntervalSince1970),
-                    retryAt.map { Int64($0.timeIntervalSince1970.rounded(.up)) }, sourceID,
+                    etag, itemCount, skippedCount, error, Self.unixSeconds(at),
+                    retryAt.map { Self.unixSeconds($0, rounding: .up) }, sourceID,
                 ])
         }
     }
@@ -108,7 +108,7 @@ extension Store {
             sql = "SELECT \(columns) FROM channel c WHERE c.groupTitle = ? ORDER BY c.sortIndex, c.id"
             arguments = [title]
         case .sports:
-            let seconds = Int64(date.timeIntervalSince1970)
+            let seconds = Self.unixSeconds(date)
             sql = """
                 SELECT \(columns) FROM channel c
                 WHERE c.isSportsGroup = 1 OR (c.guideRef IS NOT NULL AND EXISTS (
@@ -162,7 +162,7 @@ extension Store {
             if on {
                 try db.execute(sql: """
                     INSERT OR IGNORE INTO favourite(streamURL, name, addedAt) VALUES (?, ?, ?)
-                    """, arguments: [streamURL, name, Int64(Date().timeIntervalSince1970)])
+                    """, arguments: [streamURL, name, Self.unixSeconds(Date())])
             } else {
                 try db.execute(sql: "DELETE FROM favourite WHERE streamURL = ?", arguments: [streamURL])
             }
@@ -175,7 +175,7 @@ extension Store {
                 INSERT INTO recent(streamURL, name, lastWatchedAt) VALUES (?, ?, ?)
                 ON CONFLICT(streamURL) DO UPDATE SET name = excluded.name,
                     lastWatchedAt = excluded.lastWatchedAt
-                """, arguments: [streamURL, name, Int64(at.timeIntervalSince1970)])
+                """, arguments: [streamURL, name, Self.unixSeconds(at)])
             try db.execute(sql: """
                 DELETE FROM recent WHERE streamURL NOT IN (
                     SELECT streamURL FROM recent ORDER BY lastWatchedAt DESC LIMIT \(Self.recentsKept))

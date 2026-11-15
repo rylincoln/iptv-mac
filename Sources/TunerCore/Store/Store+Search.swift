@@ -35,7 +35,7 @@ extension Store {
     /// as a prefix. Each list holds at most `limit` entries; the limit is applied in SQL.
     public func search(_ text: String, at: Date, limit: Int = 50) throws -> SearchResults {
         guard limit > 0, let match = FTSQuery.make(from: text) else { return .empty }
-        let seconds = Int64(at.timeIntervalSince1970)
+        let seconds = Self.unixSeconds(at)
         let horizon = seconds + Int64(Self.searchHorizon)
         return try db.read { db in
             let onNow = try Self.hits(db, sql: """

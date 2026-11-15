@@ -59,11 +59,11 @@ private final class StatementGuideWriter: GuideWriter {
             counts.programmesWithoutChannel += 1
             return
         }
-        let stop = Int64(p.stop.timeIntervalSince1970)
+        let stop = Store.unixSeconds(p.stop)
         // Already past the retention window: never stored, same result as pruning afterwards.
         guard stop >= cutoff else { return }
         try insertProgramme.execute(arguments: [
-            ref, Int64(p.start.timeIntervalSince1970), stop, p.title, p.subTitle, p.desc,
+            ref, Store.unixSeconds(p.start), stop, p.title, p.subTitle, p.desc,
             SportsClassifier.isSportsCategory(p.categories),
         ])
         counts.programmes += 1
@@ -78,7 +78,7 @@ extension Store {
     public func replaceGuide(
         sourceID: Int64, now: Date, load: (GuideWriter) throws -> Void
     ) throws -> GuideWriteCounts {
-        let cutoff = Int64(now.timeIntervalSince1970) - 24 * 3600
+        let cutoff = Self.unixSeconds(now) - 24 * 3600
         return try db.write { db in
             try db.execute(sql: """
                 DELETE FROM programme WHERE guideRef IN (
@@ -139,7 +139,7 @@ extension Store {
 
     /// The programme airing at `at` (start <= at < stop) per guide channel.
     public func nowPlaying(at: Date) throws -> [Int64: ProgrammeRow] {
-        let seconds = Int64(at.timeIntervalSince1970)
+        let seconds = Self.unixSeconds(at)
         return try db.read { db in
             var result: [Int64: ProgrammeRow] = [:]
             // Ascending start, so on overlap the latest-starting programme wins.
@@ -163,7 +163,7 @@ extension Store {
             try Row.fetchAll(db, sql: """
                 SELECT id, guideRef, start, stop, title, subTitle, desc, isSport FROM programme
                 WHERE guideRef = ? AND start >= ? ORDER BY start, id LIMIT ?
-                """, arguments: [guideRef, Int64(after.timeIntervalSince1970), limit]
+                """, arguments: [guideRef, Self.unixSeconds(after), limit]
             ).map(Self.programme)
         }
     }
