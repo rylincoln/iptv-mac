@@ -33,8 +33,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 /// Which pane has the keyboard. `channelList` is the middle column's list: the channels, or the search
 /// results while they show. The sidebar's search field is `search`; typing a letter in the middle
-/// list moves there.
-enum PaneFocus: Hashable { case channelList, player, search }
+/// list moves there. `covered` is the channel list while something covers it; nothing asks for it,
+/// so a covered list never has the keyboard.
+enum PaneFocus: Hashable { case channelList, player, search, covered }
 
 private struct MainWindow: View {
     let model: AppModel

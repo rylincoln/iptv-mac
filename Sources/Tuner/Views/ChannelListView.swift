@@ -7,60 +7,82 @@ struct ChannelListView: View {
     var focus: FocusState<PaneFocus?>.Binding
 
     var body: some View {
-        if let results = model.searchResults {
-            SearchResultsView(model: model, results: results, focus: focus)
-        } else if model.hasChannels {
-            channelList
-        } else {
-            ContentUnavailableView {
-                Label("Add a playlist to get started", systemImage: "tv")
-            } actions: {
-                Button("Add Playlist File…") { PlaylistFilePanel.present(for: model) }
-                    .disabled(model.isImporting)
+        // The channel list stays in the window for as long as the window is open. Search results and
+        // the first-run prompt cover it rather than replace it: a List put back into the window holding
+        // thousands of rows is slow to rebuild and makes AppKit warn of a reentrant table delegate.
+        // Covered, it keeps its rows, selection and scroll position, and takes no keyboard, clicks or
+        // VoiceOver: no focus value names it (`PaneFocus.channelList` then means the results list),
+        // Tab passes it by (`focusable(false)`; with no interactions, `true` adds no Tab stop of its
+        // own), and it is not hit-tested.
+        let covered = model.searchResults != nil || !model.hasChannels
+        ZStack {
+            channelList(covered: covered)
+                .opacity(covered ? 0 : 1)
+                .focusable(!covered, interactions: [])
+                .allowsHitTesting(!covered)
+                .accessibilityHidden(covered)
+                .onChange(of: covered) { _, isCovered in
+                    // Covered while it had the keyboard (results came in, or the library proved empty):
+                    // the keyboard goes to the results, or nowhere. Uncovered with nothing focused (the
+                    // first import, a section chosen while searching): to the list, as when it first
+                    // appears. On the next turn, once the focus bindings above have changed.
+                    Task {
+                        if isCovered {
+                            if focus.wrappedValue == .covered {
+                                focus.wrappedValue = model.searchResults != nil ? .channelList : nil
+                            }
+                        } else if focus.wrappedValue == nil {
+                            focus.wrappedValue = .channelList
+                        }
+                    }
+                }
+            if let results = model.searchResults {
+                SearchResultsView(model: model, results: results, focus: focus)
+            } else if !model.hasChannels {
+                ContentUnavailableView {
+                    Label("Add a playlist to get started", systemImage: "tv")
+                } actions: {
+                    Button("Add Playlist File…") { PlaylistFilePanel.present(for: model) }
+                        .disabled(model.isImporting)
+                }
             }
         }
     }
 
-    private var channelList: some View {
+    private func channelList(covered: Bool) -> some View {
         // Read once here, so rows get plain values and nothing per row touches the model.
         let nowPlaying = model.nowPlaying
         let now = model.nowPlayingAt
-        return ScrollViewReader { proxy in
-            List(model.rows, selection: $model.selectedChannelID) { channel in
-                ChannelRowView(channel: channel, programme: channel.guideRef.flatMap { nowPlaying[$0] }, now: now)
-            }
-            // Every row is 40 pt plus the list's 8 pt of insets. Told this, the list sizes all rows before
-            // drawing them, so the scroller does not jump while a long list scrolls (measured on macOS 27).
-            .environment(\.defaultMinListRowHeight, ChannelRowView.height + 8)
-            .focused(focus, equals: .channelList)
-            .onAppear {
-                if focus.wrappedValue == nil { focus.wrappedValue = .channelList }
-                // Back from a search the selection is as it was; bring it into view. Here, not on the
-                // next turn: the list then lays out once, at the selection. Deferred, it laid out its
-                // top rows first and Escape took 15–20 ms longer, with no fewer AppKit warnings.
-                if let id = model.selectedChannelID { proxy.scrollTo(id, anchor: .center) }
-            }
-            // One modifier for the whole list: double-click plays, no per-row gestures.
-            .contextMenu(forSelectionType: Int64.self) { ids in
-                if let channel = channel(in: ids) {
-                    Button("Play") { model.play(channel) }
-                    Button(channel.isFavourite ? "Remove from Favourites" : "Add to Favourites") {
-                        model.toggleFavourite(channel)
-                    }
+        return List(model.rows, selection: $model.selectedChannelID) { channel in
+            ChannelRowView(channel: channel, programme: channel.guideRef.flatMap { nowPlaying[$0] }, now: now)
+        }
+        // Every row is 40 pt plus the list's 8 pt of insets. Told this, the list sizes all rows before
+        // drawing them, so the scroller does not jump while a long list scrolls (measured on macOS 27).
+        .environment(\.defaultMinListRowHeight, ChannelRowView.height + 8)
+        .focused(focus, equals: covered ? .covered : .channelList)
+        .onAppear {
+            if focus.wrappedValue == nil { focus.wrappedValue = .channelList }
+        }
+        // One modifier for the whole list: double-click plays, no per-row gestures.
+        .contextMenu(forSelectionType: Int64.self) { ids in
+            if let channel = channel(in: ids) {
+                Button("Play") { model.play(channel) }
+                Button(channel.isFavourite ? "Remove from Favourites" : "Add to Favourites") {
+                    model.toggleFavourite(channel)
                 }
-            } primaryAction: { ids in
-                if let channel = channel(in: ids) { model.play(channel) }
             }
-            .onKeyPress(.return) {
-                guard let id = model.selectedChannelID, let channel = channel(in: [id]) else { return .ignored }
-                model.play(channel)
-                return .handled
-            }
-            .typingStartsSearch(model: model, focus: focus)
-            .overlay {
-                if model.rows.isEmpty {
-                    Text(emptyText).foregroundStyle(.secondary)
-                }
+        } primaryAction: { ids in
+            if let channel = channel(in: ids) { model.play(channel) }
+        }
+        .onKeyPress(.return) {
+            guard let id = model.selectedChannelID, let channel = channel(in: [id]) else { return .ignored }
+            model.play(channel)
+            return .handled
+        }
+        .typingStartsSearch(model: model, focus: focus)
+        .overlay {
+            if model.rows.isEmpty {
+                Text(emptyText).foregroundStyle(.secondary)
             }
         }
     }
