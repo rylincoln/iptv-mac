@@ -5,12 +5,27 @@ public enum SearchResultID: Hashable, Sendable {
     case channel(Int64)
 }
 
+extension ProgrammeHit {
+    /// This hit's row among the programmes on now, and among the later ones.
+    public var onNowID: SearchResultID { .onNow(programmeID: programme.id, channelID: channel.id) }
+    public var laterID: SearchResultID { .later(programmeID: programme.id, channelID: channel.id) }
+}
+
+extension ChannelRow {
+    public var resultID: SearchResultID { .channel(id) }
+}
+
 extension SearchResults {
+    public var isEmpty: Bool { onNow.isEmpty && later.isEmpty && channels.isEmpty }
+
     /// Every row, in the order the list shows them: on now, later, then channels.
     public var resultIDs: [SearchResultID] {
-        onNow.map { .onNow(programmeID: $0.programme.id, channelID: $0.channel.id) }
-            + later.map { .later(programmeID: $0.programme.id, channelID: $0.channel.id) }
-            + channels.map { .channel($0.id) }
+        onNow.map(\.onNowID) + later.map(\.laterID) + channels.map(\.resultID)
+    }
+
+    /// The top row, without listing the rest.
+    public var firstResultID: SearchResultID? {
+        onNow.first?.onNowID ?? later.first?.laterID ?? channels.first?.resultID
     }
 
     /// The row to select in these results, found again for the same text as `old`, where `id` was
