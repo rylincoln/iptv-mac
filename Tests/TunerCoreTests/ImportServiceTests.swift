@@ -104,6 +104,14 @@ private func withTempFile<T>(_ data: Data, _ body: (String) async throws -> T) a
     return try await body(url.path)
 }
 
+/// A new, empty folder of its own, so no other test's files can appear in it.
+private func emptyFolder() throws -> URL {
+    let folder = FileManager.default.temporaryDirectory
+        .appendingPathComponent("import-temp-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    return folder
+}
+
 private func service(_ store: Store, session: URLSession = .shared) -> ImportService {
     ImportService(store: store, session: session, now: { fixedNow })
 }
@@ -300,6 +308,45 @@ private func expectGuideInStore(_ store: Store) throws {
             #expect(!error.contains("SECRET"))
             #expect(!error.contains("example.invalid"))
         }
+    }
+
+    @Test func decompressedGuideIsDeletedAfterAnImportAndAfterAFailure() async throws {
+        let folder = try emptyFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = try Store.inMemory()
+        let cases: [(String, Data, Bool)] = [
+            ("imported", gzip(Data(guideXML().utf8)), true),
+            ("not a guide", gzip(Data("<html><body>Service unavailable</body></html>".utf8)), false),
+            ("corrupt gzip", Data([0x1F, 0x8B]) + Data(repeating: 0x42, count: 64), false),
+        ]
+        for (name, body, succeeds) in cases {
+            try await withTempFile(body) { path in
+                let id = try store.addSource(kind: .guide, location: path)
+                let importer = ImportService(store: store, now: { fixedNow }, temporaryDirectory: folder)
+                let outcome = try? await importer.importGuide(sourceID: id)
+                #expect((outcome != nil) == succeeds, "\(name)")
+            }
+            #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty, "\(name)")
+        }
+    }
+
+    @Test func leftoverDecompressedGuidesAreSwept() throws {
+        let folder = try emptyFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let manager = FileManager.default
+        let leftovers = ["tuner-\(UUID().uuidString).xml", "tuner-\(UUID().uuidString).xml"]
+        let others = ["tuner-\(UUID().uuidString).xml.gz", "other-\(UUID().uuidString).xml", "tuner-notes.xml"]
+        for name in leftovers + others {
+            #expect(manager.createFile(atPath: folder.appendingPathComponent(name).path, contents: Data("x".utf8)))
+        }
+        // A folder named like a leftover, and the test suites' own folders, are not touched.
+        let folders = ["tuner-\(UUID().uuidString).xml", "tuner-store-\(UUID().uuidString)"]
+        for name in folders {
+            try manager.createDirectory(at: folder.appendingPathComponent(name), withIntermediateDirectories: false)
+        }
+        ImportService.removeLeftoverFiles(in: folder)
+        let remaining = Set(try manager.contentsOfDirectory(atPath: folder.path))
+        #expect(remaining == Set(others + folders))
     }
 
     @Test func missingFileThrowsUnreadable() async throws {

@@ -103,6 +103,9 @@ typealias ChannelSection = TunerCore.Section
     @ObservationIgnored private var resultsText: String?
     /// Return was pressed in the search field before the results for its text were in.
     @ObservationIgnored private var activateWhenSearched = false
+    /// Deletes what an import cut short by a quit or a crash left in the temporary folder. Started at
+    /// launch, off the main thread; an import waits for it, so it never deletes a live import's file.
+    @ObservationIgnored private var leftoverSweep: Task<Void, Never>?
 
     private static let searchPause: Duration = .milliseconds(80)
 
@@ -113,6 +116,7 @@ typealias ChannelSection = TunerCore.Section
         supervisor = PlaybackSupervisor(
             player: player, memory: BackgroundBufferMemory(store: store), now: Date.init)
         importMessage = message
+        leftoverSweep = Task.detached(priority: .utility) { ImportService.removeLeftoverFiles() }
         supervisor.onStatusChange = { [weak self] status in self?.statusChanged(status) }
         reloadRows(selectingFirst: true)
         reloadHasChannels()
@@ -546,6 +550,7 @@ typealias ChannelSection = TunerCore.Section
         guard !isImporting else { return }
         isImporting = true
         importMessage = "Importing…"
+        await leftoverSweep?.value
         let store = self.store
         let importer = self.importer
         importMessage = await Task.detached(priority: .utility) { await work(store, importer) }.value

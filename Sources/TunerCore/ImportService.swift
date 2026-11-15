@@ -18,11 +18,33 @@ public struct ImportService: Sendable {
     private let store: Store
     private let session: URLSession
     private let now: @Sendable () -> Date
+    /// Where a gzipped guide is decompressed to, for the length of its import.
+    private let temporaryDirectory: URL
 
-    public init(store: Store, session: URLSession = .shared, now: @escaping @Sendable () -> Date = Date.init) {
+    public init(
+        store: Store, session: URLSession = .shared, now: @escaping @Sendable () -> Date = Date.init,
+        temporaryDirectory: URL = FileManager.default.temporaryDirectory
+    ) {
         self.store = store
         self.session = session
         self.now = now
+        self.temporaryDirectory = temporaryDirectory
+    }
+
+    /// Deletes guides left decompressed in `directory` by an import that never finished (the app quit
+    /// or crashed part way). Touches only files named as `importGuide` names them. Run it before any
+    /// import starts, never while one runs.
+    public static func removeLeftoverFiles(in directory: URL = FileManager.default.temporaryDirectory) {
+        let manager = FileManager.default
+        guard let names = try? manager.contentsOfDirectory(atPath: directory.path) else { return }
+        for name in names where isTemporaryName(name) {
+            let path = directory.appendingPathComponent(name).path
+            var isDirectory: ObjCBool = false
+            guard manager.fileExists(atPath: path, isDirectory: &isDirectory), !isDirectory.boolValue else {
+                continue
+            }
+            try? manager.removeItem(atPath: path)
+        }
     }
 
     public func importPlaylist(sourceID: Int64) async throws -> ImportOutcome {
@@ -44,7 +66,7 @@ public struct ImportService: Sendable {
             var decompressed: URL?
             defer { if let decompressed { try? FileManager.default.removeItem(at: decompressed) } }
             if try Self.isGzip(file) {
-                let out = Self.temporaryURL()
+                let out = temporaryURL()
                 decompressed = out
                 do { try Gunzip.inflate(from: file, to: out) } catch { throw ImportError.notAGuide }
                 parseFile = out
@@ -168,7 +190,20 @@ public struct ImportService: Sendable {
         return head.count == 2 && head[head.startIndex] == 0x1F && head[head.startIndex + 1] == 0x8B
     }
 
-    private static func temporaryURL() -> URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent("tuner-\(UUID().uuidString).xml")
+    private static let temporaryPrefix = "tuner-"
+    private static let temporarySuffix = ".xml"
+
+    /// Deleted when the import ends, however it ends; `removeLeftoverFiles` sweeps up after one that
+    /// never ended.
+    private func temporaryURL() -> URL {
+        temporaryDirectory.appendingPathComponent(
+            "\(Self.temporaryPrefix)\(UUID().uuidString)\(Self.temporarySuffix)")
+    }
+
+    /// `tuner-<UUID>.xml`, as `temporaryURL` makes it, and nothing else.
+    private static func isTemporaryName(_ name: String) -> Bool {
+        guard name.hasPrefix(temporaryPrefix), name.hasSuffix(temporarySuffix) else { return false }
+        let middle = name.dropFirst(temporaryPrefix.count).dropLast(temporarySuffix.count)
+        return UUID(uuidString: String(middle)) != nil
     }
 }
