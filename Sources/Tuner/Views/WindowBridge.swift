@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import TunerCore
 
 /// The main window's AppKit side: reports whether the window is on screen (not minimised, hidden,
 /// covered or on another Space) and when it leaves full screen by any route, takes the window in
@@ -40,7 +41,7 @@ final class WindowBridgeView: NSView {
     /// The small picture's size when it is first shown, and the least it can be resized to.
     static let pictureSize = NSSize(width: 480, height: 270)
     static let smallestPicture = NSSize(width: 240, height: 135)
-    private static let pictureMargin: CGFloat = 20
+    static let pictureMargin: CGFloat = 20
 
     private struct BeforePicture {
         var frame: NSRect
@@ -146,8 +147,9 @@ final class WindowBridgeView: NSView {
         // In the bottom right corner of the screen it is on.
         let size = window.frameRect(forContentRect: NSRect(origin: .zero, size: Self.pictureSize)).size
         let screen = (window.screen ?? NSScreen.main)?.visibleFrame ?? window.frame
-        let origin = NSPoint(x: screen.maxX - size.width - Self.pictureMargin, y: screen.minY + Self.pictureMargin)
-        window.setFrame(NSRect(origin: origin, size: size), display: true, animate: true)
+        let corner = NSRect(origin: NSPoint(x: screen.maxX, y: screen.minY), size: size)
+        window.setFrame(
+            PicturePlacement.snapped(corner, on: screen, margin: Self.pictureMargin), display: true, animate: true)
     }
 
     private func leavePicture(_ window: NSWindow, _ before: BeforePicture) {

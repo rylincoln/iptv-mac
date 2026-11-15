@@ -83,7 +83,8 @@ struct PlayerPaneView: View {
             }
             // The small picture is moved by dragging it anywhere. The layer takes the mouse before
             // the window can, so the window is moved here: by as far as the pointer has gone on the
-            // screen since the drag began.
+            // screen since the drag began, kept wholly on the screen the pointer is on; let go, it
+            // settles into that screen's nearest corner.
             .simultaneousGesture(
                 DragGesture(minimumDistance: 3)
                     .onChanged { _ in
@@ -91,13 +92,29 @@ struct PlayerPaneView: View {
                         let pointer = NSEvent.mouseLocation
                         let start = pictureDrag ?? (pointer, window.frame.origin)
                         if pictureDrag == nil { pictureDrag = start }
-                        window.setFrameOrigin(
-                            NSPoint(
+                        let moved = NSRect(
+                            origin: NSPoint(
                                 x: start.window.x + pointer.x - start.pointer.x,
-                                y: start.window.y + pointer.y - start.pointer.y))
+                                y: start.window.y + pointer.y - start.pointer.y),
+                            size: window.frame.size)
+                        guard let screen = Self.screen(under: pointer, or: window) else { return }
+                        window.setFrameOrigin(PicturePlacement.kept(moved, on: screen).origin)
                     }
-                    .onEnded { _ in pictureDrag = nil },
+                    .onEnded { _ in
+                        pictureDrag = nil
+                        guard model.pictureInPicture, let window = model.videoView.window,
+                              let screen = Self.screen(under: NSEvent.mouseLocation, or: window)
+                        else { return }
+                        let corner = PicturePlacement.snapped(
+                            window.frame, on: screen, margin: WindowBridgeView.pictureMargin)
+                        if corner != window.frame { window.setFrame(corner, display: true, animate: true) }
+                    },
                 isEnabled: model.pictureInPicture)
+    }
+
+    /// The usable area of the screen the pointer is on, else of the window's own.
+    private static func screen(under pointer: NSPoint, or window: NSWindow) -> NSRect? {
+        (NSScreen.screens.first { $0.frame.contains(pointer) } ?? window.screen)?.visibleFrame
     }
 
     /// The channel list, with the search results over it while they show. Put away, it stays in the
