@@ -84,7 +84,7 @@ struct MainWindow: View {
         .navigationTitle(title)
         .navigationSubtitle(model.importMessage ?? "")
         .sheet(item: prompt) { prompt in
-            SourceURLSheet(kind: prompt.kind) { location in
+            SourceURLSheet(kind: prompt.kind, model: model) { location in
                 Task {
                     switch prompt.kind {
                     case .playlist: await model.addPlaylist(location: location)

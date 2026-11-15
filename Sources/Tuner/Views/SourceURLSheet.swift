@@ -1,9 +1,12 @@
 import SwiftUI
 import TunerCore
 
-/// One text field for a playlist or guide URL.
+/// One text field for a playlist or guide URL. One import runs at a time: while one does, Add says
+/// "Importing…" and waits, and the text is kept for an Add once it has finished.
 struct SourceURLSheet: View {
     let kind: SourceKind
+    /// Read for `isImporting` alone.
+    let model: AppModel
     let add: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var text = ""
@@ -19,9 +22,9 @@ struct SourceURLSheet: View {
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
-                Button("Add", action: submit)
+                Button(model.isImporting ? "Importing…" : "Add", action: submit)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(location == nil)
+                    .disabled(location == nil || model.isImporting)
             }
         }
         .padding(20)
@@ -38,7 +41,7 @@ struct SourceURLSheet: View {
     }
 
     private func submit() {
-        guard let location else { return }
+        guard let location, !model.isImporting else { return }
         add(location)
         dismiss()
     }
