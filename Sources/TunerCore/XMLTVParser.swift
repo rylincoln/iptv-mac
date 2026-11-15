@@ -16,7 +16,7 @@ public enum XMLTVTime {
         }
         guard let y = num(0, 4), let mo = num(4, 2), let d = num(6, 2),
               let h = num(8, 2), let mi = num(10, 2), let sec = num(12, 2),
-              (1...12).contains(mo), (1...31).contains(d), h < 24, mi < 60, sec < 61
+              (1...12).contains(mo), d >= 1, d <= daysIn(month: mo, year: y), h < 24, mi < 60, sec < 61
         else { return nil }
 
         var offset = 0
@@ -38,6 +38,19 @@ public enum XMLTVTime {
         let days = era * 146_097 + doe - 719_468
         let seconds = days * 86_400 + h * 3600 + mi * 60 + sec - offset
         return Date(timeIntervalSince1970: TimeInterval(seconds))
+    }
+
+    /// Gregorian: a date such as 31 February is refused, not carried into March.
+    private static func daysIn(month: Int, year: Int) -> Int {
+        switch month {
+        case 2:
+            let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+            return leap ? 29 : 28
+        case 4, 6, 9, 11:
+            return 30
+        default:
+            return 31
+        }
     }
 }
 
@@ -72,7 +85,7 @@ public enum XMLTVParser {
         }
     }
 
-    private final class Delegate: NSObject, XMLParserDelegate {
+    final class Delegate: NSObject, XMLParserDelegate {
         let onChannel: (ParsedGuideChannel) throws -> Void
         let onProgramme: (ParsedProgramme) throws -> Void
         var summary = XMLTVSummary(channels: 0, programmes: 0, skipped: 0)
@@ -178,7 +191,10 @@ public enum XMLTVParser {
             }
         }
 
+        /// After a callback has thrown, nothing more is delivered, whether or not the aborted parser
+        /// still reports elements.
         private func deliver(_ parser: XMLParser, _ body: () throws -> Void) {
+            guard callbackError == nil else { return }
             do { try body() } catch {
                 callbackError = error
                 parser.abortParsing()
