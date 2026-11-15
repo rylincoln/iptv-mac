@@ -43,6 +43,11 @@ struct ChannelCommands: Commands {
             Button("Video Full Screen") { model?.requestVideoFullScreenToggle() }
                 .keyboardShortcut(.return, modifiers: .command)
                 .disabled(model == nil)
+            Button(model?.showsChannelList == false ? "Show Channel List" : "Hide Channel List") {
+                model?.toggleChannelList()
+            }
+            .keyboardShortcut("l", modifiers: .command)
+            .disabled(model == nil)
             Divider()
         }
         CommandMenu("Channel") {

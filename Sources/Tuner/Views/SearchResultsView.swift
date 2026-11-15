@@ -7,6 +7,8 @@ import TunerCore
 struct SearchResultsView: View {
     @Bindable var model: AppModel
     let results: SearchResults
+    /// The channel list is put away, and the results with it: they take no keyboard.
+    let hidden: Bool
     var focus: FocusState<PaneFocus?>.Binding
 
     var body: some View {
@@ -64,15 +66,16 @@ struct SearchResultsView: View {
             }
         }
         .environment(\.defaultMinListRowHeight, ChannelRowView.height + 8)
-        .focused(focus, equals: .channelList)
+        .focusable(!hidden, interactions: [])
+        .focused(focus, equals: hidden ? .covered : .channelList)
         // One modifier for the whole list: double-click acts, no per-row gestures.
         .contextMenu(forSelectionType: SearchResultID.self) { _ in
             EmptyView()
         } primaryAction: { ids in
-            if ids.count == 1, let id = ids.first { model.activateSearchResult(id) }
+            if !hidden, ids.count == 1, let id = ids.first { model.activateSearchResult(id) }
         }
         .onKeyPress(.return) {
-            guard let id = model.selectedResultID else { return .ignored }
+            guard !hidden, let id = model.selectedResultID else { return .ignored }
             model.activateSearchResult(id)
             return .handled
         }

@@ -15,6 +15,7 @@ typealias ChannelSection = TunerCore.Section
         set {
             currentSection = newValue
             reloadRows()
+            showChannelList()
         }
     }
     private(set) var rows: [ChannelRow] = []
@@ -46,6 +47,7 @@ typealias ChannelSection = TunerCore.Section
             guard newValue != currentSearchText else { return }
             currentSearchText = newValue
             scheduleSearch()
+            if !newValue.isEmpty { showChannelList() }
         }
     }
     /// What `searchText` found, shown over the channel list. Nil when the text has no letters
@@ -70,6 +72,10 @@ typealias ChannelSection = TunerCore.Section
     /// Bumped by `requestVideoFullScreenToggle`; the window puts the video in or out of full screen on
     /// each change.
     private(set) var videoFullScreenRequests = 0
+    /// Whether the channel list (or the search results over it) shows over the video. It shows when
+    /// a section is chosen, a search is typed or asked for, and when playback is stopped; it is put
+    /// away when a channel is played, so the video is left alone. The window and ⌘L change it too.
+    var showsChannelList = true
     private(set) var status: PlaybackSupervisor.Status = .idle
     /// "Importing…", "4,144 channels", or a short fixed error. Never a location.
     private(set) var importMessage: String?
@@ -187,6 +193,7 @@ typealias ChannelSection = TunerCore.Section
     /// entry asked for earlier and still being read is dropped: the last request wins.
     func play(_ channel: ChannelRow) {
         cancelRecentsPlay()
+        if showsChannelList { showsChannelList = false }
         if chosenProgramme != nil { chosenProgramme = nil }
         if playingChannel?.streamURL == channel.streamURL, status == .starting || status == .playing { return }
         if channel.guideRef != playingChannel?.guideRef { upNext = [] }  // never show another channel's
@@ -202,6 +209,7 @@ typealias ChannelSection = TunerCore.Section
 
     func stop() {
         cancelRecentsPlay()
+        showChannelList()
         supervisor.stop()
         playingChannel = nil
         upNextLoad?.cancel()
@@ -514,10 +522,20 @@ typealias ChannelSection = TunerCore.Section
         videoFullScreenRequests &+= 1
     }
 
+    /// ⌘L.
+    func toggleChannelList() {
+        showsChannelList.toggle()
+    }
+
+    private func showChannelList() {
+        if !showsChannelList { showsChannelList = true }
+    }
+
     // MARK: Search
 
     /// ⌘F, or a letter typed in a list.
     func requestSearchField() {
+        showChannelList()
         searchFieldRequests &+= 1
     }
 

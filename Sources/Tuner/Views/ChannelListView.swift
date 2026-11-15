@@ -14,7 +14,11 @@ struct ChannelListView: View {
         // VoiceOver: no focus value names it (`PaneFocus.channelList` then means the results list),
         // Tab passes it by (`focusable(false)`; with no interactions, `true` adds no Tab stop of its
         // own), and it is not hit-tested.
-        let covered = model.searchResults != nil || !model.hasChannels
+        //
+        // Put away (`showsChannelList` false; the pane makes it unseen and unclickable), the list is
+        // treated as covered, and so are the results: the keyboard goes to the video.
+        let hidden = !model.showsChannelList
+        let covered = model.searchResults != nil || !model.hasChannels || hidden
         ZStack {
             // Compared only on `covered`, so a new set of results, or a favourite patched into them,
             // updates this view and the results without rebuilding the channel list.
@@ -27,13 +31,11 @@ struct ChannelListView: View {
                     // the list does not update when only the focus changes.
                     guard now == .covered else { return }
                     Task {
-                        if focus.wrappedValue == .covered {
-                            focus.wrappedValue = model.searchResults != nil ? .channelList : nil
-                        }
+                        if focus.wrappedValue == .covered { focus.wrappedValue = model.focusAfterCovered }
                     }
                 }
             if let results = model.searchResults {
-                SearchResultsView(model: model, results: results, focus: focus)
+                SearchResultsView(model: model, results: results, hidden: hidden, focus: focus)
             } else if !model.hasChannels {
                 ContentUnavailableView {
                     Label("Add a playlist to get started", systemImage: "tv")
@@ -90,9 +92,7 @@ private struct ChannelList: View, Equatable {
                 // value that turns `.covered` later is handled in `ChannelListView`.)
                 Task {
                     if isCovered {
-                        if focus.wrappedValue == .covered {
-                            focus.wrappedValue = model.searchResults != nil ? .channelList : nil
-                        }
+                        if focus.wrappedValue == .covered { focus.wrappedValue = model.focusAfterCovered }
                     } else if focus.wrappedValue == nil {
                         focus.wrappedValue = .channelList
                     }
@@ -149,7 +149,9 @@ private struct ChannelList: View, Equatable {
 
     /// Covered at this moment. Key handlers read this, not `covered`, which is from the list's last
     /// update and may predate the results that cover it.
-    private var coveredNow: Bool { model.searchResults != nil || !model.hasChannels }
+    private var coveredNow: Bool {
+        model.searchResults != nil || !model.hasChannels || !model.showsChannelList
+    }
 
     /// Keys a covered list passes on: Escape (leave the search) and Tab and Shift-Tab (move on).
     private static let passedOn: Set<Character> = ["\u{1B}", "\t", "\u{19}"]
@@ -172,6 +174,15 @@ private struct ChannelList: View, Equatable {
         case .favourites: return "No favourites"
         case .sports, .all, .group: return "No channels"
         }
+    }
+}
+
+extension AppModel {
+    /// Where the keyboard goes from a covered channel list: to the video when the list is put away,
+    /// to the results when they cover it, otherwise nowhere.
+    var focusAfterCovered: PaneFocus? {
+        if !showsChannelList { return .player }
+        return searchResults != nil ? .channelList : nil
     }
 }
 

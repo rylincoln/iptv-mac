@@ -2,33 +2,54 @@ import AppKit
 import SwiftUI
 import TunerCore
 
-/// The video, and under it what is on. In full screen only the video shows, filling the screen.
+/// The window's main pane: the video, filling it, and over the video whatever is asked for. The
+/// channel list (or the search results) is a drawer down the leading edge; what is on is a card at
+/// the bottom. Everything over the video is flat and slightly see-through: no blur, so nothing is
+/// sampled from the video as it plays.
 struct PlayerPaneView: View {
     let model: AppModel
     @Binding var isFullScreen: Bool
     var focus: FocusState<PaneFocus?>.Binding
+    /// The height of the toolbar lying over the pane's top edge; none in full screen.
+    let topInset: CGFloat
     @State private var idle = IdleWatch()
 
+    /// The drawer's width, and how far in the card sits while the drawer shows.
+    private static let drawerWidth: CGFloat = 340
+
     var body: some View {
-        VStack(spacing: 0) {
-            video.layoutPriority(1)  // full width first; the details take what is left
-            if !isFullScreen {
-                if let chosen = model.chosenProgramme {
-                    // A later programme picked from the search results; playback is unchanged.
-                    ProgrammeDetails(
-                        channel: chosen.channel, programme: chosen.programme, upNext: [], now: model.nowPlayingAt)
-                } else {
-                    ProgrammeDetails(
-                        channel: model.playingChannel,
-                        programme: model.playingChannel?.guideRef.flatMap { model.nowPlaying[$0] },
-                        upNext: model.upNext,
-                        now: model.nowPlayingAt)
-                }
-            }
+        ZStack(alignment: .bottomLeading) {
+            video
+            InfoCard(model: model, idle: idle)
+                .padding(.leading, model.showsChannelList ? Self.drawerWidth : 0)
+            drawer
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: isFullScreen ? .center : .top)
-        .background(isFullScreen ? Color.black : Color.clear)
-        .ignoresSafeArea(edges: isFullScreen ? .all : [])
+        .overlay(alignment: .topTrailing) {
+            if model.showsStats { StatsOverlay(readout: model.statsReadout).padding(.top, topInset) }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            idle.hidesPointer = isFullScreen
+            idle.start(over: model.videoView)
+        }
+        .onChange(of: isFullScreen) { _, on in
+            idle.hidesPointer = on
+            idle.pointerMoved()
+        }
+        .onDisappear { idle.stop() }
+    }
+
+    /// One `VideoView` for the window's whole life, so the player's view is never moved to another
+    /// container. It keeps its shape, centred on black.
+    private var video: some View {
+        ZStack {
+            Color.black
+            VideoView(videoView: model.videoView)
+                .aspectRatio(16.0 / 9.0, contentMode: .fit)
+            clickLayer
+            PlaybackStatusOverlay(model: model)  // above the click layer: Try Again is a button
+                .padding(.top, topInset)
+        }
         .focusable()
         .focusEffectDisabled()
         .focused(focus, equals: .player)
@@ -37,43 +58,42 @@ struct PlayerPaneView: View {
             isFullScreen.toggle()
             return .handled
         }
-        .onChange(of: isFullScreen) { _, on in
-            if on { idle.start(in: model.videoView.window) } else { idle.stop() }
-        }
-        .onDisappear { idle.stop() }
     }
 
-    /// One `VideoView` in both layouts, so the player's view is never moved to another container.
-    private var video: some View {
-        VideoView(videoView: model.videoView)
-            .aspectRatio(16.0 / 9.0, contentMode: .fit)
-            .frame(maxWidth: .infinity, maxHeight: isFullScreen ? .infinity : nil)
-            .background(Color.black)
-            .overlay {
-                if isFullScreen {
-                    clickLayer.onContinuousHover { phase in
-                        if case .active = phase { idle.pointerMoved() }
-                    }
-                } else {
-                    clickLayer
-                }
-            }
-            .overlay { PlaybackStatusOverlay(model: model) }  // above the click layer: Try Again is a button
-            .overlay(alignment: .topLeading) {
-                if model.showsStats { StatsOverlay(readout: model.statsReadout) }
-            }
-            .overlay(alignment: .bottomLeading) {
-                if isFullScreen { FullScreenBanner(model: model, idle: idle) }
-            }
-    }
-
-    /// Takes clicks before the AppKit video view does: a click focuses the pane, so F works, and a
-    /// double-click toggles full screen.
+    /// Takes clicks before the AppKit video view does. A click gives the video the keyboard, so F
+    /// works, and puts the channel list away if something is playing; a double-click toggles full
+    /// screen. Pointer movement over it shows the card.
     private var clickLayer: some View {
         Color.clear
             .contentShape(Rectangle())
             .onTapGesture(count: 2) { isFullScreen.toggle() }
-            .simultaneousGesture(TapGesture().onEnded { focus.wrappedValue = .player })
+            .simultaneousGesture(
+                TapGesture().onEnded {
+                    if model.playingChannel != nil, model.showsChannelList { model.showsChannelList = false }
+                    focus.wrappedValue = .player
+                }
+            )
+            .onContinuousHover { phase in
+                if case .active = phase { idle.pointerMoved() }
+            }
+    }
+
+    /// The channel list, with the search results over it while they show. Put away, it stays in the
+    /// window, unseen: it keeps its rows, selection and scroll position, and takes no keyboard,
+    /// clicks or VoiceOver (see `ChannelListView`).
+    private var drawer: some View {
+        let shown = model.showsChannelList
+        return ChannelListView(model: model, focus: focus)
+            .scrollContentBackground(.hidden)
+            .safeAreaPadding(.top, topInset)
+            .frame(width: Self.drawerWidth)
+            .frame(maxHeight: .infinity)
+            .background(Color.black.opacity(0.8))
+            .environment(\.colorScheme, .dark)
+            .opacity(shown ? 1 : 0)
+            .allowsHitTesting(shown)
+            .accessibilityHidden(!shown)
+            .animation(.easeOut(duration: 0.15), value: shown)
     }
 }
 
@@ -90,7 +110,7 @@ private struct PlaybackStatusOverlay: View {
             ProgressView()
                 .controlSize(.small)
                 .padding(10)
-                .glassEffect(.regular, in: .circle)
+                .background(.black.opacity(0.6), in: Circle())
                 .environment(\.colorScheme, .dark)
                 .accessibilityLabel("Starting")
                 .allowsHitTesting(false)
@@ -103,8 +123,7 @@ private struct PlaybackStatusOverlay: View {
                         .foregroundStyle(.white)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
-                        .glassEffect()
-                        .environment(\.colorScheme, .dark)
+                        .background(.black.opacity(0.8), in: Capsule())
                         .accessibilityLabel("Reconnecting")
                 }
                 Spacer()
@@ -117,131 +136,94 @@ private struct PlaybackStatusOverlay: View {
                     .font(.title3.weight(.semibold))
                     .foregroundStyle(.white)
                 Button("Try Again") { model.retry() }
-                    .buttonStyle(.glassProminent)
+                    .buttonStyle(.borderedProminent)
             }
             .padding(24)
-            .glassEffect(.regular, in: .rect(cornerRadius: 12))
-            .environment(\.colorScheme, .dark)
+            .background(.black.opacity(0.8), in: RoundedRectangle(cornerRadius: 12))
         }
     }
 }
 
-/// Over the full-screen video while the pointer is moving: the channel, and its programme now. It
-/// shows on entering full screen and goes with the pointer, three seconds after the last movement.
-/// It alone watches the idle state and the guide, and takes no clicks.
-private struct FullScreenBanner: View {
+/// Over the video's bottom edge: the playing channel and its programme now. While the channel list
+/// shows it stays up and says more (the description, what is next), or shows a later programme
+/// picked from the search results. With the list away it is brief, shows while the pointer moves
+/// and goes three seconds after the last movement. It alone watches the idle state and the guide,
+/// and takes no clicks.
+private struct InfoCard: View {
     let model: AppModel
     let idle: IdleWatch
 
     var body: some View {
+        let full = model.showsChannelList
+        let visible = full || !idle.isIdle
         ZStack(alignment: .bottomLeading) {
-            if !idle.isIdle, let channel = model.playingChannel {
-                let programme = channel.guideRef.flatMap { model.nowPlaying[$0] }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(channel.name)
-                        .font(programme == nil ? .title2.weight(.semibold) : .headline)
-                        .foregroundStyle(programme == nil ? .white : .white.opacity(0.75))
-                        .lineLimit(1)
-                    if let programme {
-                        Text(programme.title).font(.title2.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
-                        Text("\(programme.start.formatted(date: .omitted, time: .shortened)) – \(programme.stop.formatted(date: .omitted, time: .shortened))")
-                            .foregroundStyle(.white.opacity(0.75))
-                            .monospacedDigit()
-                    }
+            if visible {
+                if full, let chosen = model.chosenProgramme {
+                    // A later programme picked from the search results; playback is unchanged.
+                    card(channel: chosen.channel, programme: chosen.programme, upNext: [], full: true)
+                } else if let channel = model.playingChannel {
+                    card(
+                        channel: channel,
+                        programme: channel.guideRef.flatMap { model.nowPlaying[$0] },
+                        upNext: full ? model.upNext : [],
+                        full: full)
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .glassEffect(.regular, in: .rect(cornerRadius: 12))
-                .environment(\.colorScheme, .dark)  // the video behind is dark more often than not
-                .padding(24)
-                .transition(.opacity)
-                .accessibilityElement(children: .combine)
             }
         }
-        .animation(.easeInOut(duration: 0.25), value: idle.isIdle)
+        .animation(.easeInOut(duration: 0.25), value: visible)
         .allowsHitTesting(false)
     }
-}
 
-/// Under the video: the playing channel's programme now, then what follows, or a later programme
-/// picked from the search results. With no guide data, the channel's name and group.
-private struct ProgrammeDetails: View {
-    let channel: ChannelRow?
-    let programme: ProgrammeRow?
-    let upNext: [ProgrammeRow]
-    let now: Date
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if let channel {
-                if let programme {
-                    header(channel: channel, programme: programme)
-                    if let desc = programme.desc, !desc.isEmpty {
-                        // Plain text when it fits; scrolls when it is long.
-                        ViewThatFits(in: .vertical) {
-                            description(desc)
-                            ScrollView { description(desc) }
+    private func card(channel: ChannelRow, programme: ProgrammeRow?, upNext: [ProgrammeRow], full: Bool) -> some View {
+        let now = model.nowPlayingAt
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(channel.name)
+                .font(programme == nil ? .title2.weight(.semibold) : .headline)
+                .foregroundStyle(programme == nil ? .white : .white.opacity(0.7))
+                .lineLimit(1)
+            if let programme {
+                Text(programme.title).font(.title2.weight(.semibold)).lineLimit(2)
+                if let subTitle = programme.subTitle, !subTitle.isEmpty {
+                    Text(subTitle).lineLimit(1)
+                }
+                HStack(spacing: 6) {
+                    Text("\(StartTime.text(programme.start, days: StartTimeForm.Days(now: now))) – \(time(programme.stop))")
+                        .foregroundStyle(.white.opacity(0.7))
+                        .monospacedDigit()
+                    if programme.start <= now && now < programme.stop { LiveBadge() }
+                }
+                if full, let desc = programme.desc, !desc.isEmpty {
+                    Text(desc)
+                        .font(.callout)
+                        .foregroundStyle(.white.opacity(0.7))
+                        .lineLimit(4)
+                        .padding(.top, 4)
+                }
+            } else if let group = channel.groupTitle {
+                Text(group).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
+            }
+            if !upNext.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(upNext) { programme in
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(time(programme.start)).foregroundStyle(.white.opacity(0.7)).monospacedDigit()
+                            Text(programme.title).lineLimit(1)
                         }
-                        .layoutPriority(1)
                     }
-                } else {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(channel.name).font(.title3.weight(.semibold)).lineLimit(2)
-                        if let group = channel.groupTitle {
-                            Text(group).foregroundStyle(.secondary).lineLimit(1)
-                        }
-                    }
-                    .fixedSize(horizontal: false, vertical: true)
                 }
-                if !upNext.isEmpty { next }
-            } else {
-                Text("Nothing playing")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 0)
-        }
-        .padding()
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func header(channel: ChannelRow, programme: ProgrammeRow) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(channel.name).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
-            Text(programme.title).font(.title3.weight(.semibold)).lineLimit(2)
-            if let subTitle = programme.subTitle, !subTitle.isEmpty {
-                Text(subTitle).lineLimit(2)
-            }
-            HStack(spacing: 6) {
-                Text("\(StartTime.text(programme.start, days: StartTimeForm.Days(now: now))) – \(time(programme.stop))")
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                if programme.start <= now && now < programme.stop {
-                    LiveBadge()
-                }
+                .font(.callout)
+                .padding(.top, 6)
             }
         }
+        .foregroundStyle(.white)
         .fixedSize(horizontal: false, vertical: true)
-    }
-
-    private func description(_ text: String) -> some View {
-        Text(text)
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .fixedSize(horizontal: false, vertical: true)
-    }
-
-    private var next: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text("Next").font(.headline)
-            ForEach(upNext) { programme in
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(time(programme.start)).foregroundStyle(.secondary).monospacedDigit()
-                    Text(programme.title).lineLimit(1)
-                }
-            }
-        }
-        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: 460, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(.black.opacity(0.8), in: RoundedRectangle(cornerRadius: 12))
+        .padding(20)
+        .transition(.opacity)
+        .accessibilityElement(children: .combine)
     }
 
     /// Local time, in the Mac's own format.
@@ -261,21 +243,23 @@ struct LiveBadge: View {
     }
 }
 
-/// Notices three seconds without pointer movement over the full-screen video, then hides the pointer.
-/// The banner over the video hides while `isIdle` is true. Its one timer exists only between
-/// `start` and `stop`. The pointer is hidden only while it is over this window and Tuner is the
-/// active app, never on another display or over another app.
+/// Notices three seconds without pointer movement over the video. The card over the video hides
+/// while `isIdle` is true, and in full screen (`hidesPointer`) so does the pointer, but only while it
+/// is over this window and Tuner is the active app, never on another display or over another app.
+/// Its one timer exists only between `start` and `stop`, and does not fire again once the pointer is
+/// still until it next moves.
 @MainActor @Observable private final class IdleWatch {
     static let delay: TimeInterval = 3
 
     private(set) var isIdle = false
+    @ObservationIgnored var hidesPointer = false
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var lastMove: TimeInterval = 0
-    @ObservationIgnored private weak var window: NSWindow?
+    @ObservationIgnored private weak var view: NSView?
 
-    func start(in window: NSWindow?) {
+    func start(over view: NSView) {
         stop()
-        self.window = window
+        self.view = view
         lastMove = ProcessInfo.processInfo.systemUptime
         let timer = Timer(timeInterval: Self.delay, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.check() }
@@ -288,11 +272,11 @@ struct LiveBadge: View {
     func stop() {
         timer?.invalidate()
         timer = nil
-        window = nil
+        view = nil
         if isIdle { isIdle = false }
     }
 
-    /// Cheap: called for every pointer movement, it only notes the time unless the pointer was hidden.
+    /// Cheap: called for every pointer movement, it only notes the time unless the card was hidden.
     func pointerMoved() {
         lastMove = ProcessInfo.processInfo.systemUptime
         guard isIdle, let timer else { return }
@@ -308,7 +292,7 @@ struct LiveBadge: View {
             return
         }
         isIdle = true
-        if NSApp.isActive, let window, window.frame.contains(NSEvent.mouseLocation) {
+        if hidesPointer, NSApp.isActive, let window = view?.window, window.frame.contains(NSEvent.mouseLocation) {
             NSCursor.setHiddenUntilMouseMoves(true)
         }
         timer.fireDate = .distantFuture  // nothing more to do until the pointer moves

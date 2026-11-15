@@ -17,7 +17,7 @@ It is for one person on one Mac. No distribution, no accounts, no App Store.
 
 ## 2. Goals
 
-1. Native Mac app in a three-pane layout (decided): sidebar, channel list, player with programme details.
+1. Native Mac app in a two-pane layout (decided 2026-11-15, replacing the three-pane layout first built): a sidebar, and a main pane the video fills, with the channel list and the programme details laid over the video on demand.
 2. M3U playlists, by local file or URL, one or more.
 3. XMLTV guide feeds, one or more, refreshed automatically in the background.
 4. One search box that matches channel names and programme titles, so typing a team finds the game.
@@ -93,22 +93,21 @@ The playback engine sits behind a small interface (section 8.4) so approach 2 co
 ### 7.1 Main window
 
 ```
-┌──────────────┬────────────────────────────┬──────────────────────────────┐
-│ ⌕ Search     │ [logo] ESPN                │                              │
-│              │        College Football    │           VIDEO              │
-│ Recents      │        ▓▓▓▓░░░░░░          │                              │
-│ Favourites   │ [logo] Fox Sports 1        │                              │
-│ Sports       │        College Football    ├──────────────────────────────┤
-│ Guide        │        ▓▓▓▓▓▓▓░░░          │ College Football        LIVE │
-│ All channels │ [logo] NFL Network         │ Tennessee at Texas A&M       │
-│              │        NFL GameDay         │ until 6:00 PM                │
-│              │        ▓▓░░░░░░░░          │ Next  6:00  CFB Scoreboard   │
-└──────────────┴────────────────────────────┴──────────────────────────────┘
+┌──────────────┬───────────────────────────────────────────────────────────┐
+│ ⌕ Search     │ [logo] ESPN            ┆                                  │
+│              │        College Football┆                                  │
+│ Recents      │        ▓▓▓▓░░░░░░      ┆             VIDEO                │
+│ Favourites   │ [logo] Fox Sports 1    ┆                                  │
+│ Sports       │        College Football┆  ┌────────────────────────────┐  │
+│ Guide        │        ▓▓▓▓▓▓▓░░░      ┆  │ College Football      LIVE │  │
+│ All channels │ [logo] NFL Network     ┆  │ Tennessee at Texas A&M     │  │
+│              │        NFL GameDay     ┆  │ Next  6:00  CFB Scoreboard │  │
+└──────────────┴────────────────────────┴──┴────────────────────────────┴──┘
 ```
 
 - **Sidebar** (call): Search, Recents, Favourites, Sports, Guide, All channels. Below those, the playlist's own groups, collapsed by default.
-- **Channel list**: logo, channel name, current programme title, progress bar through it. Channels with no guide data show name and logo only and remain playable.
-- **Player pane**: video on top, programme title/description/times and the next programme below. Double-click or a key toggles full screen; controls fade when idle.
+- **Channel list**: a flat, slightly see-through drawer over the video's leading edge, with no blur. It shows when a section is chosen, a search is typed, or nothing is playing; it is put away when a channel is played, by Escape, by a click on the video, or by a shortcut. Rows: logo, channel name, current programme title, progress bar through it. Channels with no guide data show name and logo only and remain playable.
+- **Main pane**: the video fills it. Programme title/description/times and the next programme are a flat card over the video's bottom edge: in full while the channel list shows, brief and only while the pointer moves once it is put away. Double-click or a key toggles full screen, where the same drawer and card work.
 - **Launch** (call): opens on Recents with the last channel selected, **not** auto-playing.
 - **Sports** (call): channels whose playlist group name contains "sport", plus any channel currently airing a programme whose guide category indicates sport.
 
@@ -124,7 +123,7 @@ One field. Results are grouped: **On now**, **Starting soon / later**, **Channel
 
 Filter chips across the top: Sports / Favourites / All, and a day picker. Sports is selected by default (call). Channels with no listings are hidden here by default.
 
-**Where it sits (call).** Selecting Guide in the sidebar replaces both the channel list and the player pane with the guide, at full width. If a channel is playing, it keeps playing in a small docked player fixed in the guide's bottom-right corner (not a floating or detachable window, so this is not picture-in-picture); clicking it returns to the three-pane view. Choosing a live programme in the guide plays it in that docked player; Return or double-click plays it and returns to the three-pane view.
+**Where it sits (call).** Selecting Guide in the sidebar replaces both the channel list and the player pane with the guide, at full width. If a channel is playing, it keeps playing in a small docked player fixed in the guide's bottom-right corner (not a floating or detachable window, so this is not picture-in-picture); clicking it returns to the main view. Choosing a live programme in the guide plays it in that docked player; Return or double-click plays it and returns to the main view.
 
 **Events view (default, decided)** — programmes in time order under "On now", "Starting soon", "Tonight", "Tomorrow", …
 

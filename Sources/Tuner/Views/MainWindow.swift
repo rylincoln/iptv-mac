@@ -27,32 +27,41 @@ struct MainWindow: View {
         NavigationSplitView(columnVisibility: $columns) {
             SidebarView(model: model, focus: $focus)
                 .navigationSplitViewColumnWidth(min: 170, ideal: 210, max: 300)
-        } content: {
-            ChannelListView(model: model, focus: $focus)
-                .navigationSplitViewColumnWidth(min: 240, ideal: 320, max: 520)
         } detail: {
             // Only marks where the player pane goes; the pane itself is laid over the window (below).
-            Color.clear.anchorPreference(key: PlayerPaneFrame.self, value: .bounds) { $0 }
+            // Under the toolbar too: the video runs to the window's top edge.
+            Color.clear.ignoresSafeArea(edges: .top)
+                .anchorPreference(key: PlayerPaneFrame.self, value: .bounds) { $0 }
         }
-        // The player pane sits above the columns, over the detail column's place, and over the whole
-        // window when the video has it alone. macOS will not hide a split view's middle column, so the
-        // video cannot be left alone by hiding columns; and placed this way the video's view never
-        // changes parent, in or out of full screen.
+        // The player pane (the video, with the channel list and what is on laid over it) sits above
+        // the columns, over the detail column's place, and over the whole window when the video has
+        // it alone. Placed this way the video's view never changes parent, in or out of full screen.
         .overlayPreferenceValue(PlayerPaneFrame.self) { anchor in
             GeometryReader { proxy in
                 let whole = CGRect(origin: .zero, size: proxy.size)
                 let frame = videoFullScreen ? whole : anchor.map { proxy[$0] } ?? whole
-                PlayerPaneView(model: model, isFullScreen: $videoFullScreen, focus: $focus)
-                    .frame(width: frame.width, height: frame.height)
-                    .offset(x: frame.minX, y: frame.minY)
+                PlayerPaneView(
+                    model: model, isFullScreen: $videoFullScreen, focus: $focus,
+                    // What the toolbar covers of the pane, which the list and the corners keep clear of.
+                    topInset: videoFullScreen ? 0 : proxy.safeAreaInsets.top
+                )
+                .frame(width: frame.width, height: frame.height)
+                .offset(x: frame.minX, y: frame.minY)
             }
-            .ignoresSafeArea(edges: videoFullScreen ? .all : [])
+            .ignoresSafeArea()
         }
         .toolbar(videoFullScreen ? .hidden : .automatic, for: .windowToolbar)
+        .toolbar(removing: model.showsChannelList ? nil : .title)
+        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)  // nothing drawn across the video
         .onExitCommand {
-            if videoFullScreen {
+            // One thing at a time, outermost last: the search, then the channel list (only while
+            // something plays, or the pane would be left blank), then full screen.
+            let searching = !model.searchText.isEmpty || focus == .search
+            if model.showsChannelList, model.playingChannel != nil, !searching || videoFullScreen {
+                model.showsChannelList = false
+            } else if videoFullScreen {
                 videoFullScreen = false
-            } else if !model.searchText.isEmpty || focus == .search {
+            } else if searching {
                 // Leaves the search: the channel list, kept in the window under the results, shows
                 // again with its section and selection. It is uncovered in this update, and can take
                 // focus only once that is done; a sidebar the search showed is hidden again with it.
@@ -83,15 +92,28 @@ struct MainWindow: View {
             // keyboard.
             if old == .search, now != .search, model.searchText.isEmpty { columnsBeforeSearch = nil }
         }
+        .onChange(of: model.showsChannelList) { _, shown in
+            // Shown: the keyboard goes to the list, unless the search field has or is about to get it.
+            // Put away: to the video. On the next turn, once the list is uncovered or covered.
+            Task {
+                if !shown {
+                    focus = .player
+                } else if focus != .search {
+                    focus = .channelList
+                }
+            }
+        }
         .onChange(of: videoFullScreen) { _, on in
             if on {
-                focus = .player
+                // The video alone, if there is one.
+                if model.playingChannel != nil { model.showsChannelList = false }
+                focus = model.showsChannelList ? .channelList : .player
             } else {
                 if searchFieldAfterFullScreen {
                     searchFieldAfterFullScreen = false
                     showSearchField()
                 } else {
-                    focus = .channelList
+                    focus = model.showsChannelList ? .channelList : .player
                 }
             }
         }
