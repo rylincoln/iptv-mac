@@ -160,4 +160,38 @@ private func titles(_ sections: [GuideSection], _ kind: GuideSection.Kind) -> [S
         let sections = GuideEvents.sections([hit(1, 1, -2, -1, "Ended")], day: now, now: now, calendar: utc)
         #expect(sections.isEmpty)
     }
+
+    // MARK: The grid
+
+    @Test func byChannelTheHitsComeEachChannelInTurnAndMakeItsRow() throws {
+        let store = try store(
+            playlist: [pc("One", tvgID: "one"), pc("Two", tvgID: "two"), pc("Silent", tvgID: "none")],
+            guide: ["one", "two"],
+            programmes: [
+                prog("two", -1, 1, "B1"), prog("one", 1, 2, "A2"), prog("one", -1, 1, "A1"), prog("two", 1, 4, "B2"),
+                prog("one", 5, 6, "Too late"),
+            ])
+        let hits = try store.guideHits(.all, from: now, to: at(3), byChannel: true)
+        #expect(hits.map(\.programme.title) == ["A1", "A2", "B1", "B2"])
+        let rows = GuideGrid.rows(hits)
+        #expect(rows.map(\.channel.name) == ["One", "Two"])  // a channel with nothing listed has no row
+        #expect(rows[1].programmes.map(\.title) == ["B1", "B2"])
+    }
+
+    @Test func theGridStartsOnTheHalfHourNowIsInAndMovesByItsStep() {
+        #expect(GuideGrid.start(now: now.addingTimeInterval(44 * 60)) == now.addingTimeInterval(30 * 60))
+        #expect(GuideGrid.start(now: now) == now)
+        #expect(GuideGrid.start(now: now.addingTimeInterval(60), steps: 2) == at(4))
+    }
+
+    @Test func aProgrammeSpansItsShareOfTheGridCutOffAtTheEdges() {
+        let inside = GuideGrid.span(start: at(1.5), stop: at(2.25), gridStart: now)
+        #expect(inside?.from == 0.5)
+        #expect(inside?.to == 0.75)
+        let over = GuideGrid.span(start: at(-1), stop: at(5), gridStart: now)
+        #expect(over?.from == 0)
+        #expect(over?.to == 1)
+        #expect(GuideGrid.span(start: at(-2), stop: now, gridStart: now) == nil)
+        #expect(GuideGrid.span(start: at(3), stop: at(4), gridStart: now) == nil)
+    }
 }

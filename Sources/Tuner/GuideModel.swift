@@ -8,6 +8,36 @@ import TunerCore
     /// Days listed, today first.
     static let dayCount = 7
 
+    /// The day's events as a list, or the hours ahead as a grid of channels against time.
+    enum Layout: Hashable { case events, grid }
+
+    /// Setting it reads what the other layout shows.
+    var layout: Layout {
+        get { currentLayout }
+        set {
+            guard newValue != currentLayout else { return }
+            currentLayout = newValue
+            if !sections.isEmpty { sections = [] }
+            if !gridRows.isEmpty { gridRows = [] }
+            show(nil)
+            reload(fresh: true)
+        }
+    }
+    /// The grid's rows, for the three hours from `gridStart`. Empty until read, and in the list.
+    private(set) var gridRows: [GuideGridRow] = []
+    private(set) var gridStart = GuideGrid.start(now: Date())
+    /// How many steps on from now the grid is moved, 0 to `GuideGrid.lastStep`. Setting it reads
+    /// those hours.
+    var gridSteps: Int {
+        get { currentGridSteps }
+        set {
+            let steps = min(max(newValue, 0), GuideGrid.lastStep)
+            guard steps != currentGridSteps else { return }
+            currentGridSteps = steps
+            reload(fresh: true)
+        }
+    }
+
     /// Whose programmes are listed. Setting it reads them.
     var filter: GuideFilter {
         get { currentFilter }
@@ -34,16 +64,15 @@ import TunerCore
     private(set) var isLoading = false
     /// The store had more listings than one read takes; the latest are left out.
     private(set) var isTruncated = false
-    /// The highlighted event's id.
+    /// The highlighted event's id, in the list.
     var selection: GuideEvent.ID? {
         get { currentSelection }
         set {
             guard newValue != currentSelection else { return }
-            currentSelection = newValue
-            selectionChanged()
+            show(newValue.flatMap(event))
         }
     }
-    /// The highlighted event.
+    /// The highlighted event: a row of the list, or one programme on one channel of the grid.
     private(set) var selected: GuideEvent?
     /// Its description, once read; the list is read without them.
     private(set) var selectedDescription: String?
@@ -51,6 +80,8 @@ import TunerCore
     private var currentFilter = GuideFilter.sports
     private var currentDayOffset = 0
     private var currentSelection: GuideEvent.ID?
+    private var currentLayout = Layout.events
+    private var currentGridSteps = 0
     @ObservationIgnored private let store: Store
     @ObservationIgnored private var isShown = false
     @ObservationIgnored private var load: Task<Void, Never>?
@@ -66,11 +97,13 @@ import TunerCore
         isShown = shown
         if shown {
             currentDayOffset = 0
+            currentGridSteps = 0
             reload(fresh: true)
         } else {
             load?.cancel()
             descriptionLoad?.cancel()
             sections = []
+            gridRows = []
             isTruncated = false
             currentSelection = nil
             selected = nil
@@ -82,7 +115,10 @@ import TunerCore
     /// day's only at midnight, when every day moves on by one.
     func minutePassed() {
         guard isShown else { return }
-        if currentDayOffset == 0 || !Calendar.current.isDate(readAt, inSameDayAs: Date()) { reload(fresh: false) }
+        // The grid's hours move on with the time, and its line for now with every minute.
+        if currentLayout == .grid || currentDayOffset == 0 || !Calendar.current.isDate(readAt, inSameDayAs: Date()) {
+            reload(fresh: false)
+        }
     }
 
     /// An import ended: programme and channel ids are new.
@@ -102,6 +138,10 @@ import TunerCore
         let calendar = Calendar.current
         let filter = currentFilter
         let store = self.store
+        if currentLayout == .grid {
+            reloadGrid(now: now)
+            return
+        }
         guard let day = calendar.date(byAdding: .day, value: currentDayOffset, to: now),
               let window = GuideEvents.window(for: day, now: now, calendar: calendar)
         else { return }
@@ -131,9 +171,38 @@ import TunerCore
         return nil
     }
 
-    private func selectionChanged() {
+    /// The grid's three hours, read channel by channel. The programme highlighted stays so, whether
+    /// or not it is still within them.
+    private func reloadGrid(now: Date) {
+        let start = GuideGrid.start(now: now, steps: currentGridSteps)
+        let filter = currentFilter
+        let store = self.store
+        load = Task {
+            let read = await Task.detached(priority: .userInitiated) { () -> (rows: [GuideGridRow], truncated: Bool)? in
+                guard let hits = try? store.guideHits(
+                    filter, from: start, to: start.addingTimeInterval(GuideGrid.length), byChannel: true)
+                else { return nil }
+                return (GuideGrid.rows(hits), hits.count >= Store.guideRowLimit)
+            }.value
+            guard !Task.isCancelled else { return }
+            isLoading = false
+            guard let read else { return }
+            if read.rows != gridRows { gridRows = read.rows }
+            if read.truncated != isTruncated { isTruncated = read.truncated }
+            if start != gridStart { gridStart = start }
+            readAt = now
+        }
+    }
+
+    /// A programme clicked in the grid.
+    func select(_ programme: ProgrammeRow, on channel: ChannelRow) {
+        show(GuideEvent(programme: programme, channels: [channel]))
+    }
+
+    /// Highlights the event, or nothing, and reads its description.
+    private func show(_ event: GuideEvent?) {
         descriptionLoad?.cancel()
-        let event = currentSelection.flatMap(event)
+        currentSelection = event?.id
         selected = event
         selectedDescription = nil
         guard let event else { return }

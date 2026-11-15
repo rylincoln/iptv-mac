@@ -1,9 +1,10 @@
 import SwiftUI
 import TunerCore
 
-/// The guide, filling the pane: what is on today and through the week, as events. A programme the
-/// same on several channels is one row. Along the bottom, the highlighted event in full, and the
-/// corner the playing video is docked in (`PlayerPaneView` puts it there).
+/// The guide, filling the pane: what is on today and through the week, as a list of events (a
+/// programme the same on several channels is one row) or as a grid of channels against time. Along
+/// the bottom, the highlighted programme in full, and the corner the playing video is docked in
+/// (`PlayerPaneView` puts it there).
 struct GuideView: View {
     let model: AppModel
     @Bindable var guide: GuideModel
@@ -20,7 +21,10 @@ struct GuideView: View {
             header
                 .padding(.top, topInset)
             Divider()
-            GuideEventList(model: model, guide: guide, focus: focus)
+            switch guide.layout {
+            case .events: GuideEventList(model: model, guide: guide, focus: focus)
+            case .grid: GuideGridView(model: model, guide: guide)
+            }
             if guide.selected != nil || model.playingChannel != nil {
                 Divider()
                 GuideDetails(model: model, guide: guide)
@@ -41,19 +45,41 @@ struct GuideView: View {
             .pickerStyle(.segmented)
             .labelsHidden()
             .fixedSize()
-            Picker("Day", selection: $guide.dayOffset) {
-                ForEach(0..<GuideModel.dayCount, id: \.self) { offset in
-                    Text(Self.dayName(offset, from: guide.readAt)).tag(offset)
+            switch guide.layout {
+            case .events:
+                Picker("Day", selection: $guide.dayOffset) {
+                    ForEach(0..<GuideModel.dayCount, id: \.self) { offset in
+                        Text(Self.dayName(offset, from: guide.readAt)).tag(offset)
+                    }
                 }
+                .labelsHidden()
+                .fixedSize()
+            case .grid:
+                ControlGroup {
+                    Button("Earlier", systemImage: "chevron.left") { guide.gridSteps -= 1 }
+                        .disabled(guide.gridSteps == 0)
+                    Button("Now") { guide.gridSteps = 0 }
+                        .disabled(guide.gridSteps == 0)
+                    Button("Later", systemImage: "chevron.right") { guide.gridSteps += 1 }
+                        .disabled(guide.gridSteps == GuideGrid.lastStep)
+                }
+                .fixedSize()
             }
-            .labelsHidden()
-            .fixedSize()
             Spacer()
             if guide.isTruncated {
                 Text("Too many listings to show them all")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
+            Picker("Layout", selection: $guide.layout) {
+                Label("Events", systemImage: "list.bullet").tag(GuideModel.Layout.events)
+                Label("Grid", systemImage: "tablecells").tag(GuideModel.Layout.grid)
+            }
+            .pickerStyle(.segmented)
+            .labelStyle(.iconOnly)
+            .labelsHidden()
+            .fixedSize()
+            .help("Events or grid")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
@@ -255,6 +281,142 @@ private struct GuideDetails: View {
                 }
                 .fixedSize()
             }
+        }
+    }
+}
+
+/// Channels down, time across: three hours, moved by the buttons above. A click highlights a
+/// programme, which then shows in full below; a double-click plays one that is on now. Rows are
+/// built only as they scroll into view.
+private struct GuideGridView: View {
+    let model: AppModel
+    let guide: GuideModel
+
+    private static let channelWidth: CGFloat = 170
+    private static let rowHeight: CGFloat = 38
+    private static let margin: CGFloat = 16
+    private static let day = Date.FormatStyle(date: .omitted, time: .shortened).weekday(.abbreviated)
+
+    var body: some View {
+        GeometryReader { proxy in
+            let track = max(proxy.size.width - Self.channelWidth - 2 * Self.margin, 120)
+            let start = guide.gridStart
+            let now = guide.readAt
+            // Where now falls across the hours shown, if it does.
+            let nowAt = GuideGrid.span(start: start, stop: now, gridStart: start).flatMap { $0.to < 1 ? $0.to : nil }
+            let selected = guide.selected.map { Cell(programme: $0.programme.id, channel: $0.channels[0].id) }
+            VStack(spacing: 0) {
+                times(start: start, track: track, today: Calendar.current.isDate(start, inSameDayAs: now))
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(guide.gridRows) { row in
+                            GuideGridRowView(
+                                row: row, start: start, now: now, nowAt: nowAt, track: track,
+                                selected: selected?.channel == row.channel.id ? selected?.programme : nil,
+                                select: { guide.select($0, on: row.channel) },
+                                play: { programme in
+                                    let at = Date()
+                                    if programme.start <= at, at < programme.stop { model.playFromGuide(row.channel) }
+                                })
+                        }
+                    }
+                    .padding(.horizontal, Self.margin)
+                }
+            }
+        }
+        .overlay {
+            if guide.gridRows.isEmpty, !guide.isLoading {
+                ContentUnavailableView(
+                    "No listings", systemImage: "calendar",
+                    description: Text("Nothing is listed for these channels in these hours."))
+            }
+        }
+    }
+
+    private struct Cell: Equatable {
+        var programme: Int64
+        var channel: Int64
+    }
+
+    /// The half hours across the top, each over its place in the rows.
+    private func times(start: Date, track: CGFloat, today: Bool) -> some View {
+        let halves = Int(GuideGrid.length / 1800)
+        return HStack(spacing: 0) {
+            Color.clear.frame(width: Self.channelWidth, height: 1)
+            ZStack(alignment: .topLeading) {
+                ForEach(0..<halves, id: \.self) { index in
+                    let time = start.addingTimeInterval(Double(index) * 1800)
+                    Text(time.formatted(index == 0 && !today ? Self.day : GuideEventRow.time))
+                        .font(.subheadline)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .offset(x: track * CGFloat(index) / CGFloat(halves))
+                }
+            }
+            .frame(width: track, alignment: .leading)
+        }
+        .padding(.horizontal, Self.margin)
+        .padding(.vertical, 6)
+    }
+
+    /// One channel: its name, then its programmes laid along the hours, with a line where now is.
+    private struct GuideGridRowView: View {
+        let row: GuideGridRow
+        let start: Date
+        let now: Date
+        let nowAt: Double?
+        let track: CGFloat
+        /// The highlighted programme, if it is on this channel.
+        let selected: Int64?
+        let select: (ProgrammeRow) -> Void
+        let play: (ProgrammeRow) -> Void
+
+        var body: some View {
+            HStack(spacing: 0) {
+                Text(row.channel.name)
+                    .lineLimit(1)
+                    .padding(.trailing, 8)
+                    .frame(width: GuideGridView.channelWidth, alignment: .leading)
+                ZStack(alignment: .topLeading) {
+                    ForEach(row.programmes) { programme in
+                        if let span = GuideGrid.span(start: programme.start, stop: programme.stop, gridStart: start) {
+                            cell(programme, width: track * CGFloat(span.to - span.from))
+                                .offset(x: track * CGFloat(span.from))
+                        }
+                    }
+                    if let nowAt {
+                        Rectangle()
+                            .fill(.red)
+                            .frame(width: 1, height: GuideGridView.rowHeight)
+                            .offset(x: track * CGFloat(nowAt))
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
+                }
+                .frame(width: track, height: GuideGridView.rowHeight, alignment: .topLeading)
+            }
+        }
+
+        private func cell(_ programme: ProgrammeRow, width: CGFloat) -> some View {
+            let live = programme.start <= now && now < programme.stop
+            let chosen = programme.id == selected
+            return Text(width > 34 ? programme.title : "")
+                .font(.callout)
+                .lineLimit(1)
+                .padding(.horizontal, 6)
+                .frame(width: max(width - 2, 1), height: GuideGridView.rowHeight - 4, alignment: .leading)
+                .background(
+                    .white.opacity(chosen ? 0.32 : live ? 0.16 : 0.08), in: RoundedRectangle(cornerRadius: 5))
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) { play(programme) }
+                .simultaneousGesture(TapGesture().onEnded { select(programme) })
+                .padding(.vertical, 2)
+                .accessibilityElement()
+                .accessibilityLabel("\(programme.title), \(programme.start.formatted(GuideEventRow.time)) on \(row.channel.name)")
+                .accessibilityAddTraits(chosen ? [.isButton, .isSelected] : .isButton)
+                .accessibilityAction { select(programme) }
         }
     }
 }

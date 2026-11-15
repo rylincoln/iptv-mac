@@ -10,6 +10,12 @@ public struct GuideEvent: Identifiable, Equatable, Sendable {
 
     /// Stable while the guide data is: the first channel's programme and channel.
     public var id: String { "\(programme.id)-\(channels[0].id)" }
+
+    /// `channels` must not be empty.
+    public init(programme: ProgrammeRow, channels: [ChannelRow]) {
+        self.programme = programme
+        self.channels = channels
+    }
 }
 
 /// A run of events under one heading of the Events view.
