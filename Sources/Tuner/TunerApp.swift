@@ -18,7 +18,10 @@ struct TunerApp: App {
             }
         }
         .defaultSize(width: 1280, height: 760)
-        .commands { SourceCommands(model: model) }
+        .commands {
+            SourceCommands(model: model)
+            ChannelCommands(model: model)
+        }
     }
 }
 
@@ -28,18 +31,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 // MARK: - Window
 
+/// Which pane has the keyboard. The sidebar's search field attaches itself with
+/// `.focused(focus, equals: .search)`; typing a letter in the channel list already asks for it, and
+/// until the field exists the list keeps focus.
+enum PaneFocus: Hashable { case channelList, player, search }
+
 private struct MainWindow: View {
     let model: AppModel
+    @FocusState private var focus: PaneFocus?
+    /// The player pane alone, filling the screen.
+    @State private var videoFullScreen = false
+    @State private var columns = NavigationSplitViewVisibility.automatic
+    @State private var columnsBeforeFullScreen = NavigationSplitViewVisibility.automatic
 
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columns) {
             SidebarView(model: model)
                 .navigationSplitViewColumnWidth(min: 170, ideal: 210, max: 300)
         } content: {
-            ChannelListView(model: model)
+            ChannelListView(model: model, focus: $focus)
                 .navigationSplitViewColumnWidth(min: 240, ideal: 320, max: 520)
         } detail: {
-            PlayerPaneView(model: model)
+            PlayerPaneView(model: model, isFullScreen: $videoFullScreen, focus: $focus)
+        }
+        .toolbar(videoFullScreen ? .hidden : .automatic, for: .windowToolbar)
+        .onExitCommand {
+            if videoFullScreen {
+                videoFullScreen = false
+            } else {
+                model.searchText = ""
+            }
+        }
+        .onChange(of: videoFullScreen) { _, on in
+            if on {
+                columnsBeforeFullScreen = columns
+                columns = .detailOnly
+                focus = .player
+            } else {
+                columns = columnsBeforeFullScreen
+                focus = .channelList
+            }
+        }
+        .background {
+            WindowBridge(
+                videoFullScreen: videoFullScreen,
+                visibilityChanged: { model.windowVisibilityChanged($0) },
+                leftFullScreen: { videoFullScreen = false })
         }
         .navigationTitle(title)
         .navigationSubtitle(model.importMessage ?? "")
@@ -78,6 +115,81 @@ private struct SourcePrompt: Identifiable {
     var id: SourceKind { kind }
 }
 
+/// The main window's AppKit side: reports whether the window is on screen (not minimised, hidden,
+/// covered or on another Space) and when it leaves full screen by any route, and takes the window in
+/// and out of full screen for the video.
+private struct WindowBridge: NSViewRepresentable {
+    let videoFullScreen: Bool
+    let visibilityChanged: (Bool) -> Void
+    let leftFullScreen: () -> Void
+
+    func makeNSView(context: Context) -> WindowBridgeView { WindowBridgeView() }
+
+    func updateNSView(_ view: WindowBridgeView, context: Context) {
+        view.visibilityChanged = visibilityChanged
+        view.leftFullScreen = leftFullScreen
+        view.setVideoFullScreen(videoFullScreen)
+    }
+}
+
+private final class WindowBridgeView: NSView {
+    var visibilityChanged: ((Bool) -> Void)?
+    var leftFullScreen: (() -> Void)?
+    private var observers: [NSObjectProtocol] = []
+    private var videoFullScreen = false
+    /// The window was not full screen before the video took it there, so leaving the video's full
+    /// screen leaves the window's too.
+    private var restoreWindowed = false
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        for observer in observers { NotificationCenter.default.removeObserver(observer) }
+        observers = []
+        guard let window else {
+            visibilityChanged?(false)
+            return
+        }
+        let center = NotificationCenter.default
+        observers.append(center.addObserver(
+            forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.reportVisibility() }
+        })
+        observers.append(center.addObserver(
+            forName: NSWindow.didExitFullScreenNotification, object: window, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.restoreWindowed = false
+                self?.leftFullScreen?()
+            }
+        })
+        reportVisibility()
+    }
+
+    func setVideoFullScreen(_ on: Bool) {
+        guard on != videoFullScreen else { return }
+        videoFullScreen = on
+        guard let window else { return }
+        let isFullScreen = window.styleMask.contains(.fullScreen)
+        if on {
+            restoreWindowed = !isFullScreen
+            guard !isFullScreen else { return }
+        } else {
+            guard restoreWindowed, isFullScreen else { return }
+            restoreWindowed = false
+        }
+        // Not during SwiftUI's update pass, which this is called from.
+        DispatchQueue.main.async { [weak window] in window?.toggleFullScreen(nil) }
+    }
+
+    private func reportVisibility() {
+        visibilityChanged?(window?.occlusionState.contains(.visible) ?? false)
+    }
+
+    /// It sits behind the whole window and must never take a click.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 // MARK: - Sources
 
 private struct SourceCommands: Commands {
@@ -98,6 +210,30 @@ private struct SourceCommands: Commands {
                 .keyboardShortcut("r", modifiers: .command)
             }
             .disabled(model?.isImporting ?? true)
+        }
+    }
+}
+
+// MARK: - Channel shortcuts
+
+/// Menu items, so the shortcuts work whichever pane has the keyboard, full screen included.
+private struct ChannelCommands: Commands {
+    let model: AppModel?
+
+    var body: some Commands {
+        CommandMenu("Channel") {
+            Group {
+                Button("Toggle Favourite") { model?.toggleFavouriteOnSelection() }
+                    .keyboardShortcut("d", modifiers: .command)
+                Button("Previous Channel") { model?.playPrevious() }
+                    .keyboardShortcut("[", modifiers: .command)
+                Divider()
+                ForEach(1...9, id: \.self) { number in
+                    Button("Play Recent \(number)") { model?.playRecent(number - 1) }
+                        .keyboardShortcut(KeyEquivalent(Character(String(number))), modifiers: .command)
+                }
+            }
+            .disabled(model == nil)
         }
     }
 }

@@ -30,6 +30,18 @@ typealias ChannelSection = TunerCore.Section
     }
     var selectedChannelID: Int64?
     private(set) var playingChannel: ChannelRow?
+    /// The programme airing on each guide channel as of `nowPlayingAt`, keyed by guide reference. One
+    /// read for the whole list, reloaded on each minute boundary while the window is visible, when it
+    /// becomes visible again, and after any import.
+    private(set) var nowPlaying: [Int64: ProgrammeRow] = [:]
+    /// When `nowPlaying` was read. Rows draw their progress bars against it, so the bars move once a
+    /// minute.
+    private(set) var nowPlayingAt = Date()
+    /// Up to three programmes after the current one on the playing channel.
+    private(set) var upNext: [ProgrammeRow] = []
+    /// Text typed towards a search. A letter typed in the channel list is added to it and Escape
+    /// clears it.
+    var searchText = ""
     private(set) var status: PlaybackSupervisor.Status = .idle
     /// "Importing…", "4,144 channels", or a short fixed error. Never a location.
     private(set) var importMessage: String?
@@ -50,6 +62,11 @@ typealias ChannelSection = TunerCore.Section
     private let supervisor: PlaybackSupervisor
     @ObservationIgnored private var ticker: Timer?
     @ObservationIgnored private var rowsLoad: Task<Void, Never>?
+    @ObservationIgnored private var nowPlayingLoad: Task<Void, Never>?
+    @ObservationIgnored private var upNextLoad: Task<Void, Never>?
+    /// Fires once, on the next minute boundary; exists only while the window is visible.
+    @ObservationIgnored private var minuteTimer: Timer?
+    @ObservationIgnored private var isWindowVisible = false
 
     init(store: Store, message: String? = nil) {
         self.store = store
@@ -61,6 +78,7 @@ typealias ChannelSection = TunerCore.Section
         supervisor.onStatusChange = { [weak self] status in self?.statusChanged(status) }
         reloadRows(selectingFirst: true)
         reloadHasChannels()
+        reloadNowPlaying()
     }
 
     /// Opens the library at ~/Library/Application Support/Tuner/tuner.sqlite. If that fails, falls back
@@ -80,7 +98,9 @@ typealias ChannelSection = TunerCore.Section
     /// already starting or playing does nothing.
     func play(_ channel: ChannelRow) {
         if playingChannel?.streamURL == channel.streamURL, status == .starting || status == .playing { return }
+        if channel.guideRef != playingChannel?.guideRef { upNext = [] }  // never show another channel's
         playingChannel = channel
+        reloadUpNext()
         supervisor.play(streamURL: channel.streamURL)
         let store = self.store
         Task.detached(priority: .utility) { try? store.recordWatched(channelID: channel.id, at: Date()) }
@@ -89,6 +109,32 @@ typealias ChannelSection = TunerCore.Section
     func stop() {
         supervisor.stop()
         playingChannel = nil
+        upNextLoad?.cancel()
+        upNext = []
+    }
+
+    /// Plays Recents entry `index` (0-based, newest first), as the store orders them.
+    func playRecent(_ index: Int) {
+        guard index >= 0 else { return }
+        playFromRecents { recents in index < recents.count ? recents[index] : nil }
+    }
+
+    /// Plays the channel watched before the current one, by the store's Recents order; with nothing
+    /// playing, the last channel watched. The current channel is skipped whether or not its own
+    /// Recents entry has been written yet.
+    func playPrevious() {
+        let current = playingChannel?.streamURL
+        playFromRecents { recents in recents.first { $0.streamURL != current } }
+    }
+
+    private func playFromRecents(_ pick: @escaping ([ChannelRow]) -> ChannelRow?) {
+        let store = self.store
+        Task {
+            let recents = await Task.detached(priority: .userInitiated) {
+                (try? store.channels(in: .recents, at: Date())) ?? []
+            }.value
+            if let channel = pick(recents) { play(channel) }
+        }
     }
 
     /// The supervisor needs a tick every second whenever it is not idle, `.unavailable` included (it
@@ -110,16 +156,96 @@ typealias ChannelSection = TunerCore.Section
 
     // MARK: Favourites
 
+    /// Shows the change at once, stars and the Favourites section alike, without waiting for the write,
+    /// which can sit behind an import; the Favourites section reloads once it is written.
     func toggleFavourite(_ channel: ChannelRow) {
         let on = !channel.isFavourite
-        if let index = rows.firstIndex(where: { $0.id == channel.id }) { rows[index].isFavourite = on }
-        if playingChannel?.id == channel.id { playingChannel?.isFavourite = on }
+        // Favourites are kept by stream URL, so every row with that URL changes.
+        for index in rows.indices where rows[index].streamURL == channel.streamURL {
+            rows[index].isFavourite = on
+        }
+        if currentSection == .favourites, !on { rows.removeAll { $0.streamURL == channel.streamURL } }
+        if playingChannel?.streamURL == channel.streamURL { playingChannel?.isFavourite = on }
         let store = self.store
         Task {
             await Task.detached(priority: .userInitiated) {
                 try? store.setFavourite(on, channelID: channel.id)
             }.value
             if currentSection == .favourites { reloadRows() }
+        }
+    }
+
+    /// ⌘D: the selected channel.
+    func toggleFavouriteOnSelection() {
+        guard let id = selectedChannelID, let channel = rows.first(where: { $0.id == id }) else { return }
+        toggleFavourite(channel)
+    }
+
+    // MARK: Guide
+
+    /// The main window reports whether it is on screen. The minute timer runs only while it is; on
+    /// becoming visible again, a list read in an earlier minute is read again at once.
+    func windowVisibilityChanged(_ visible: Bool) {
+        guard visible != isWindowVisible else { return }
+        isWindowVisible = visible
+        minuteTimer?.invalidate()
+        minuteTimer = nil
+        guard visible else { return }
+        if Self.minute(of: Date()) != Self.minute(of: nowPlayingAt) { reloadNowPlaying() }
+        scheduleMinuteTimer()
+    }
+
+    /// One-shot, set from the wall clock each time, so it stays on the boundary after a sleep.
+    private func scheduleMinuteTimer() {
+        let boundary = Date(timeIntervalSince1970: TimeInterval(Self.minute(of: Date()) + 1) * 60)
+        let timer = Timer(fire: boundary, interval: 0, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.isWindowVisible else { return }
+                self.reloadNowPlaying()
+                self.scheduleMinuteTimer()
+            }
+        }
+        timer.tolerance = 1  // never early, so programmes starting on the minute are included
+        RunLoop.main.add(timer, forMode: .common)
+        minuteTimer = timer
+    }
+
+    private static func minute(of date: Date) -> Int64 {
+        Int64((date.timeIntervalSince1970 / 60).rounded(.down))
+    }
+
+    /// A failed read keeps what is shown.
+    private func reloadNowPlaying() {
+        nowPlayingLoad?.cancel()
+        let store = self.store
+        let now = Date()
+        nowPlayingLoad = Task {
+            let loaded = await Task.detached(priority: .userInitiated) { try? store.nowPlaying(at: now) }.value
+            guard !Task.isCancelled, let loaded else { return }
+            nowPlaying = loaded
+            nowPlayingAt = now
+            reloadUpNext()
+        }
+    }
+
+    /// `upcoming(after:)` includes a programme starting exactly at `after`, so it is given the current
+    /// programme's stop (never earlier than now, in case the list is a minute stale), or now when
+    /// nothing is airing; the current programme then never shows as Next.
+    private func reloadUpNext() {
+        upNextLoad?.cancel()
+        guard let ref = playingChannel?.guideRef else {
+            if !upNext.isEmpty { upNext = [] }
+            return
+        }
+        let now = Date()
+        let after = max(nowPlaying[ref]?.stop ?? now, now)
+        let store = self.store
+        upNextLoad = Task {
+            let loaded = await Task.detached(priority: .userInitiated) {
+                try? store.upcoming(guideRef: ref, after: after, limit: 3)
+            }.value
+            guard !Task.isCancelled, let loaded, playingChannel?.guideRef == ref, loaded != upNext else { return }
+            upNext = loaded
         }
     }
 
@@ -151,8 +277,19 @@ typealias ChannelSection = TunerCore.Section
     private func apply(rows newRows: [ChannelRow]) {
         let selected = selectedChannelID.flatMap { id in rows.first { $0.id == id } }
         rows = newRows
+        refreshPlayingChannel(from: newRows)
         guard let selected, !newRows.contains(where: { $0.id == selected.id }) else { return }
         selectedChannelID = newRows.first { $0.streamURL == selected.streamURL }?.id
+    }
+
+    /// When the playing channel is listed, takes its current row: after a guide import it may have
+    /// gained or changed its guide link, which the details pane follows.
+    private func refreshPlayingChannel(from newRows: [ChannelRow]) {
+        guard let playing = playingChannel,
+              let row = newRows.first(where: { $0.streamURL == playing.streamURL }), row != playing
+        else { return }
+        playingChannel = row
+        if row.guideRef != playing.guideRef { reloadUpNext() }
     }
 
     private func reloadHasChannels() {
@@ -196,6 +333,7 @@ typealias ChannelSection = TunerCore.Section
         isImporting = false
         reloadRows()
         reloadHasChannels()
+        reloadNowPlaying()
         if isGroupsExpanded { loadGroups() }
     }
 

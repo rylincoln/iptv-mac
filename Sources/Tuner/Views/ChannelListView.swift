@@ -1,8 +1,10 @@
+import AppKit
 import SwiftUI
 import TunerCore
 
 struct ChannelListView: View {
     @Bindable var model: AppModel
+    var focus: FocusState<PaneFocus?>.Binding
 
     var body: some View {
         if model.hasChannels {
@@ -18,8 +20,18 @@ struct ChannelListView: View {
     }
 
     private var channelList: some View {
-        List(model.rows, selection: $model.selectedChannelID) { channel in
-            Text(channel.name).lineLimit(1)
+        // Read once here, so rows get plain values and nothing per row touches the model.
+        let nowPlaying = model.nowPlaying
+        let now = model.nowPlayingAt
+        return List(model.rows, selection: $model.selectedChannelID) { channel in
+            ChannelRowView(channel: channel, programme: channel.guideRef.flatMap { nowPlaying[$0] }, now: now)
+        }
+        // Every row is 40 pt plus the list's 8 pt of insets. Told this, the list sizes all rows before
+        // drawing them, so the scroller does not jump while a long list scrolls (measured on macOS 27).
+        .environment(\.defaultMinListRowHeight, ChannelRowView.height + 8)
+        .focused(focus, equals: .channelList)
+        .onAppear {
+            if focus.wrappedValue == nil { focus.wrappedValue = .channelList }
         }
         // One modifier for the whole list: double-click plays, no per-row gestures.
         .contextMenu(forSelectionType: Int64.self) { ids in
@@ -35,6 +47,14 @@ struct ChannelListView: View {
         .onKeyPress(.return) {
             guard let id = model.selectedChannelID, let channel = channel(in: [id]) else { return .ignored }
             model.play(channel)
+            return .handled
+        }
+        // Typing starts a search: the letter goes into the search text and focus moves to the search
+        // field, which attaches itself to `PaneFocus.search`.
+        .onKeyPress(characters: .letters, phases: .down) { press in
+            guard press.modifiers.isDisjoint(with: [.command, .control, .option]) else { return .ignored }
+            model.searchText += press.characters
+            focus.wrappedValue = .search
             return .handled
         }
         .overlay {
@@ -56,5 +76,97 @@ struct ChannelListView: View {
         case .favourites: return "No favourites"
         case .sports, .all, .group: return "No channels"
         }
+    }
+}
+
+/// Logo, name, a star for a favourite, and what is on now with a bar for how far through it is. The
+/// same fixed height with or without a programme, so every row is alike and cheap to lay out.
+private struct ChannelRowView: View {
+    static let height: CGFloat = 40
+
+    let channel: ChannelRow
+    let programme: ProgrammeRow?
+    let now: Date
+
+    var body: some View {
+        HStack(spacing: 8) {
+            LogoView(urlString: channel.logoURL)
+                .id(channel.logoURL)  // a row given another logo starts afresh
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    Text(channel.name).lineLimit(1)
+                    if channel.isFavourite {
+                        Image(systemName: "star.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.yellow)
+                            .accessibilityLabel("Favourite")
+                    }
+                }
+                if let programme {
+                    Text(programme.title)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    ElapsedBar(fraction: elapsedFraction(start: programme.start, stop: programme.stop, now: now))
+                }
+            }
+        }
+        .frame(height: Self.height)
+    }
+}
+
+/// How far `now` is through `start..<stop`, from 0 to 1.
+private func elapsedFraction(start: Date, stop: Date, now: Date) -> Double {
+    let length = stop.timeIntervalSince(start)
+    guard length > 0 else { return 0 }
+    return min(max(now.timeIntervalSince(start) / length, 0), 1)
+}
+
+/// A thin track filled from the leading edge to `fraction`.
+private struct ElapsedBar: View {
+    let fraction: Double
+
+    var body: some View {
+        Capsule()
+            .fill(.quaternary)
+            .overlay(alignment: .leading) { LeadingPart(fraction: fraction).fill(.secondary) }
+            .clipShape(Capsule())
+            .frame(height: 3)
+    }
+
+    private struct LeadingPart: Shape {
+        let fraction: Double
+
+        func path(in rect: CGRect) -> Path {
+            Path(CGRect(x: rect.minX, y: rect.minY, width: rect.width * fraction, height: rect.height))
+        }
+    }
+}
+
+/// A 32 pt logo with rounded corners. Draws a placeholder at once and the logo when it arrives; a
+/// logo already in memory is drawn straight away. The load is cancelled if the row scrolls away first.
+private struct LogoView: View {
+    let urlString: String?
+    @State private var loaded: NSImage?
+
+    var body: some View {
+        ZStack {
+            if let image = loaded ?? cached {
+                Image(nsImage: image).resizable().scaledToFit()
+            } else {
+                Rectangle().fill(.quaternary)
+                Image(systemName: "tv").foregroundStyle(.tertiary)
+            }
+        }
+        .frame(width: LogoCache.pointSize, height: LogoCache.pointSize)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .task {
+            guard let urlString, loaded == nil, cached == nil else { return }
+            loaded = await LogoCache.shared.image(for: urlString)
+        }
+    }
+
+    private var cached: NSImage? {
+        urlString.flatMap { LogoCache.shared.cachedImage(for: $0) }
     }
 }
