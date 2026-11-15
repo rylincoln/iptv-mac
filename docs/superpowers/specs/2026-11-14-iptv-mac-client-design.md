@@ -26,6 +26,7 @@ It is for one person on one Mac. No distribution, no accounts, no App Store.
 7. Playback that manages itself (decided): adapts buffering per channel, detects stuck streams, reconnects without being asked. No tuning knobs.
 8. Casting to Google Cast devices (Shield / Google TV) (decided). Apple TV casting is wanted but **deferred** (decided): the owner has only a Shield on the network, and it will be built once an Apple TV is available to test against.
 9. Stays fast with thousands of channels and tens of thousands of programmes.
+10. Extreme performance on the minimum of system resources, while staying rock solid (decided: a side goal, added by the owner on 2026-11-14 during the first build). It applies to every part: CPU, memory, disk, wake-ups and network use are kept as low as the job allows, idle and while playing. Where speed and stability pull apart, stability wins (call). It is a quality bar on what is already in scope, not a reason to add features or to optimise without measuring first (call).
 
 ## 3. Non-goals for the first version
 
@@ -37,7 +38,8 @@ It fails, even if every feature works, if it:
 
 - feels slow with ~4,000 channels (scrolling, search-as-you-type, launch);
 - needs fiddling to keep a stream alive;
-- looks or behaves like a ported app (non-standard controls, no keyboard navigation, ignores Mac conventions).
+- looks or behaves like a ported app (non-standard controls, no keyboard navigation, ignores Mac conventions);
+- is wasteful or fragile: noticeably heavy on CPU, memory or battery for what it is doing, or prone to crashes and hangs (goal 10).
 
 ## 5. Constraints and facts about the real data
 
@@ -213,6 +215,7 @@ UI: play(channel) ─► Playback supervisor ─► Player (VLCKit │ AVPlayer)
 - **Times** are stored in UTC and shown in the Mac's local time zone.
 - **Unmatched channels** are normal (two thirds of the guide's channels have no programmes and ~4% of names do not match). They are listed and playable; nothing is shown as an error.
 - **Logos** load lazily with an on-disk cache; a missing or slow logo never delays a row.
+- **Resources and stability (goal 10; specifics are calls)**: nothing runs on the main thread that can run elsewhere; no polling or timers beyond the ones a design section names; files and tables are streamed and batched, never loaded whole; every cache has a bound; data from files, the network or the database never reaches a force-unwrap or a trap.
 - **Credentials**: source URLs live only in the database. Logs and the stats overlay show host names, never full URLs.
 
 ### 8.5 Errors
@@ -231,6 +234,7 @@ UI: play(channel) ─► Playback supervisor ─► Player (VLCKit │ AVPlayer)
 - Unit tests with **synthetic** fixtures for: M3U parsing (quoted commas, missing attributes, odd prefixes, empty ids), XMLTV parsing (time zones, missing fields, entities), matching (id, name, normalised name, no match), event collapsing, now/next and search queries.
 - Playback supervisor tested against a fake Player: stall → reconnect, repeated failure → back-off → give up, stutter → buffer step-up and persistence.
 - A performance check that loads a synthetic 5,000-channel / 80,000-programme dataset and asserts search and "now" queries stay within an interactive budget.
+- Resource checks alongside the timings (call): peak memory during a full-size guide import, and the app's CPU and memory while idle and while playing one channel.
 - Real playback and casting are verified by hand against the owner's streams and devices.
 
 ## 9. Left to the builder
