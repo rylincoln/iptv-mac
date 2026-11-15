@@ -7,7 +7,9 @@ struct ChannelListView: View {
     var focus: FocusState<PaneFocus?>.Binding
 
     var body: some View {
-        if model.hasChannels {
+        if let results = model.searchResults {
+            SearchResultsView(model: model, results: results, focus: focus)
+        } else if model.hasChannels {
             channelList
         } else {
             ContentUnavailableView {
@@ -23,43 +25,40 @@ struct ChannelListView: View {
         // Read once here, so rows get plain values and nothing per row touches the model.
         let nowPlaying = model.nowPlaying
         let now = model.nowPlayingAt
-        return List(model.rows, selection: $model.selectedChannelID) { channel in
-            ChannelRowView(channel: channel, programme: channel.guideRef.flatMap { nowPlaying[$0] }, now: now)
-        }
-        // Every row is 40 pt plus the list's 8 pt of insets. Told this, the list sizes all rows before
-        // drawing them, so the scroller does not jump while a long list scrolls (measured on macOS 27).
-        .environment(\.defaultMinListRowHeight, ChannelRowView.height + 8)
-        .focused(focus, equals: .channelList)
-        .onAppear {
-            if focus.wrappedValue == nil { focus.wrappedValue = .channelList }
-        }
-        // One modifier for the whole list: double-click plays, no per-row gestures.
-        .contextMenu(forSelectionType: Int64.self) { ids in
-            if let channel = channel(in: ids) {
-                Button("Play") { model.play(channel) }
-                Button(channel.isFavourite ? "Remove from Favourites" : "Add to Favourites") {
-                    model.toggleFavourite(channel)
-                }
+        return ScrollViewReader { proxy in
+            List(model.rows, selection: $model.selectedChannelID) { channel in
+                ChannelRowView(channel: channel, programme: channel.guideRef.flatMap { nowPlaying[$0] }, now: now)
             }
-        } primaryAction: { ids in
-            if let channel = channel(in: ids) { model.play(channel) }
-        }
-        .onKeyPress(.return) {
-            guard let id = model.selectedChannelID, let channel = channel(in: [id]) else { return .ignored }
-            model.play(channel)
-            return .handled
-        }
-        // Typing starts a search: the letter goes into the search text and focus moves to the search
-        // field, which attaches itself to `PaneFocus.search`.
-        .onKeyPress(characters: .letters, phases: .down) { press in
-            guard press.modifiers.isDisjoint(with: [.command, .control, .option]) else { return .ignored }
-            model.searchText += press.characters
-            focus.wrappedValue = .search
-            return .handled
-        }
-        .overlay {
-            if model.rows.isEmpty {
-                Text(emptyText).foregroundStyle(.secondary)
+            // Every row is 40 pt plus the list's 8 pt of insets. Told this, the list sizes all rows before
+            // drawing them, so the scroller does not jump while a long list scrolls (measured on macOS 27).
+            .environment(\.defaultMinListRowHeight, ChannelRowView.height + 8)
+            .focused(focus, equals: .channelList)
+            .onAppear {
+                if focus.wrappedValue == nil { focus.wrappedValue = .channelList }
+                // Back from a search the selection is as it was; bring it into view.
+                if let id = model.selectedChannelID { proxy.scrollTo(id, anchor: .center) }
+            }
+            // One modifier for the whole list: double-click plays, no per-row gestures.
+            .contextMenu(forSelectionType: Int64.self) { ids in
+                if let channel = channel(in: ids) {
+                    Button("Play") { model.play(channel) }
+                    Button(channel.isFavourite ? "Remove from Favourites" : "Add to Favourites") {
+                        model.toggleFavourite(channel)
+                    }
+                }
+            } primaryAction: { ids in
+                if let channel = channel(in: ids) { model.play(channel) }
+            }
+            .onKeyPress(.return) {
+                guard let id = model.selectedChannelID, let channel = channel(in: [id]) else { return .ignored }
+                model.play(channel)
+                return .handled
+            }
+            .typingStartsSearch(model: model, focus: focus)
+            .overlay {
+                if model.rows.isEmpty {
+                    Text(emptyText).foregroundStyle(.secondary)
+                }
             }
         }
     }
@@ -79,9 +78,26 @@ struct ChannelListView: View {
     }
 }
 
+extension View {
+    /// Typing a letter starts a search, or adds to the one showing: the letter goes into the search
+    /// text and focus moves to the search field, which attaches itself to `PaneFocus.search` and puts
+    /// the insertion point after the letter. The request lets the window show the sidebar first if it
+    /// is hidden.
+    func typingStartsSearch(model: AppModel, focus: FocusState<PaneFocus?>.Binding) -> some View {
+        onKeyPress(characters: .letters, phases: .down) { press in
+            guard press.modifiers.isDisjoint(with: [.command, .control, .option]) else { return .ignored }
+            model.searchText += press.characters
+            focus.wrappedValue = .search
+            model.requestSearchField()
+            return .handled
+        }
+    }
+}
+
 /// Logo, name, a star for a favourite, and what is on now with a bar for how far through it is. The
-/// same fixed height with or without a programme, so every row is alike and cheap to lay out.
-private struct ChannelRowView: View {
+/// same fixed height with or without a programme, so every row is alike and cheap to lay out. Also
+/// the rows of the search results' Channels section.
+struct ChannelRowView: View {
     static let height: CGFloat = 40
 
     let channel: ChannelRow
@@ -145,7 +161,7 @@ private struct ElapsedBar: View {
 
 /// A 32 pt logo with rounded corners. Draws a placeholder at once and the logo when it arrives; a
 /// logo already in memory is drawn straight away. The load is cancelled if the row scrolls away first.
-private struct LogoView: View {
+struct LogoView: View {
     let urlString: String?
     @State private var loaded: NSImage?
 

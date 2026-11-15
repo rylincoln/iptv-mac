@@ -13,11 +13,17 @@ struct PlayerPaneView: View {
         VStack(spacing: 0) {
             video.layoutPriority(1)  // full width first; the details take what is left
             if !isFullScreen {
-                ProgrammeDetails(
-                    channel: model.playingChannel,
-                    programme: model.playingChannel?.guideRef.flatMap { model.nowPlaying[$0] },
-                    upNext: model.upNext,
-                    now: model.nowPlayingAt)
+                if let chosen = model.chosenProgramme {
+                    // A later programme picked from the search results; playback is unchanged.
+                    ProgrammeDetails(
+                        channel: chosen.channel, programme: chosen.programme, upNext: [], now: model.nowPlayingAt)
+                } else {
+                    ProgrammeDetails(
+                        channel: model.playingChannel,
+                        programme: model.playingChannel?.guideRef.flatMap { model.nowPlaying[$0] },
+                        upNext: model.upNext,
+                        now: model.nowPlayingAt)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: isFullScreen ? .center : .top)
@@ -64,8 +70,8 @@ struct PlayerPaneView: View {
     }
 }
 
-/// Under the video: the playing channel's programme now, then what follows. With no guide data, the
-/// channel's name and group.
+/// Under the video: the playing channel's programme now, then what follows, or a later programme
+/// picked from the search results. With no guide data, the channel's name and group.
 private struct ProgrammeDetails: View {
     let channel: ChannelRow?
     let programme: ProgrammeRow?
@@ -114,7 +120,8 @@ private struct ProgrammeDetails: View {
                 Text(subTitle).lineLimit(2)
             }
             HStack(spacing: 6) {
-                Text("\(time(programme.start)) – \(time(programme.stop))")
+                let today = Calendar.current.dateInterval(of: .day, for: now)
+                Text("\(StartTime.text(programme.start, today: today)) – \(time(programme.stop))")
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
                 if programme.start <= now && now < programme.stop {
@@ -151,7 +158,7 @@ private struct ProgrammeDetails: View {
     }
 }
 
-private struct LiveBadge: View {
+struct LiveBadge: View {
     var body: some View {
         Text("LIVE")
             .font(.caption2.weight(.bold))

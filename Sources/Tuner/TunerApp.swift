@@ -31,9 +31,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 // MARK: - Window
 
-/// Which pane has the keyboard. The sidebar's search field attaches itself with
-/// `.focused(focus, equals: .search)`; typing a letter in the channel list already asks for it, and
-/// until the field exists the list keeps focus.
+/// Which pane has the keyboard. `channelList` is the middle column's list: the channels, or the search
+/// results while they show. The sidebar's search field is `search`; typing a letter in the middle
+/// list moves there.
 enum PaneFocus: Hashable { case channelList, player, search }
 
 private struct MainWindow: View {
@@ -43,10 +43,12 @@ private struct MainWindow: View {
     @State private var videoFullScreen = false
     @State private var columns = NavigationSplitViewVisibility.automatic
     @State private var columnsBeforeFullScreen = NavigationSplitViewVisibility.automatic
+    /// ⌘F in video full screen: the search field takes the keyboard once the panes are back.
+    @State private var searchFieldAfterFullScreen = false
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columns) {
-            SidebarView(model: model)
+            SidebarView(model: model, focus: $focus)
                 .navigationSplitViewColumnWidth(min: 170, ideal: 210, max: 300)
         } content: {
             ChannelListView(model: model, focus: $focus)
@@ -58,10 +60,14 @@ private struct MainWindow: View {
         .onExitCommand {
             if videoFullScreen {
                 videoFullScreen = false
-            } else {
+            } else if !model.searchText.isEmpty || focus == .search {
+                // Leaves the search: the channel list comes back with its section and selection. It
+                // replaces the results in this update, and can take focus only once it is there.
                 model.searchText = ""
+                Task { focus = .channelList }
             }
         }
+        .onChange(of: model.searchFieldRequests) { showSearchField() }
         .onChange(of: videoFullScreen) { _, on in
             if on {
                 columnsBeforeFullScreen = columns
@@ -69,7 +75,12 @@ private struct MainWindow: View {
                 focus = .player
             } else {
                 columns = columnsBeforeFullScreen
-                focus = .channelList
+                if searchFieldAfterFullScreen {
+                    searchFieldAfterFullScreen = false
+                    showSearchField()
+                } else {
+                    focus = .channelList
+                }
             }
         }
         .background {
@@ -93,7 +104,20 @@ private struct MainWindow: View {
         .frame(minWidth: 900, minHeight: 500)
     }
 
+    /// ⌘F, or letters typed in a list: leaves video full screen first, and shows the sidebar if it is
+    /// hidden. The field may come back in this update, and can take focus only once it is there.
+    private func showSearchField() {
+        if videoFullScreen {
+            searchFieldAfterFullScreen = true
+            videoFullScreen = false
+            return
+        }
+        if columns == .detailOnly || columns == .doubleColumn { columns = .all }
+        Task { focus = .search }
+    }
+
     private var title: String {
+        if model.searchResults != nil { return "Search" }
         switch model.section {
         case .recents: return "Recents"
         case .favourites: return "Favourites"
@@ -221,6 +245,11 @@ private struct ChannelCommands: Commands {
     let model: AppModel?
 
     var body: some Commands {
+        CommandGroup(after: .textEditing) {
+            Button("Find…") { model?.requestSearchField() }
+                .keyboardShortcut("f", modifiers: .command)
+                .disabled(model == nil)
+        }
         CommandMenu("Channel") {
             Group {
                 Button("Toggle Favourite") { model?.toggleFavouriteOnSelection() }

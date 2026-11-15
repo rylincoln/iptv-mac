@@ -39,9 +39,26 @@ typealias ChannelSection = TunerCore.Section
     private(set) var nowPlayingAt = Date()
     /// Up to three programmes after the current one on the playing channel.
     private(set) var upNext: [ProgrammeRow] = []
-    /// Text typed towards a search. A letter typed in the channel list is added to it and Escape
-    /// clears it.
-    var searchText = ""
+    /// What the search field holds. Setting it schedules a search (`scheduleSearch`).
+    var searchText: String {
+        get { currentSearchText }
+        set {
+            guard newValue != currentSearchText else { return }
+            currentSearchText = newValue
+            scheduleSearch()
+        }
+    }
+    /// What `searchText` found, shown in place of the channel list. Nil when the text has no letters
+    /// or digits to search for; empty lists when it has but nothing matches.
+    private(set) var searchResults: SearchResults?
+    /// The highlighted result. The first row is selected whenever new results arrive.
+    var selectedResultID: SearchResultID?
+    /// A later programme picked from the results. The details pane shows it in place of the playing
+    /// channel's programme until a channel is played or the search is cleared.
+    private(set) var chosenProgramme: ProgrammeHit?
+    /// Bumped by `requestSearchField`; the window shows the search field and gives it the keyboard on
+    /// each change.
+    private(set) var searchFieldRequests = 0
     private(set) var status: PlaybackSupervisor.Status = .idle
     /// "Importing…", "4,144 channels", or a short fixed error. Never a location.
     private(set) var importMessage: String?
@@ -55,6 +72,7 @@ typealias ChannelSection = TunerCore.Section
 
     private var currentSection: ChannelSection = .recents
     private var isGroupsExpanded = false
+    private var currentSearchText = ""
 
     private let store: Store
     private let importer: ImportService
@@ -67,6 +85,16 @@ typealias ChannelSection = TunerCore.Section
     /// Fires once, on the next minute boundary; exists only while the window is visible.
     @ObservationIgnored private var minuteTimer: Timer?
     @ObservationIgnored private var isWindowVisible = false
+    /// Waits out the pause in typing, then runs the store query.
+    @ObservationIgnored private var searchLoad: Task<Void, Never>?
+    /// The store query running, if any. The next one starts only after it has finished.
+    @ObservationIgnored private var searchQuery: Task<SearchResults?, Never>?
+    /// The text `searchResults` were found for.
+    @ObservationIgnored private var resultsText: String?
+    /// Return was pressed in the search field before the results for its text were in.
+    @ObservationIgnored private var activateWhenSearched = false
+
+    private static let searchPause: Duration = .milliseconds(80)
 
     init(store: Store, message: String? = nil) {
         self.store = store
@@ -95,8 +123,9 @@ typealias ChannelSection = TunerCore.Section
     // MARK: Playback
 
     /// Plays through the supervisor and records the channel in Recents. Asking for the channel that is
-    /// already starting or playing does nothing.
+    /// already starting or playing does nothing, beyond the details pane going back to it.
     func play(_ channel: ChannelRow) {
+        if chosenProgramme != nil { chosenProgramme = nil }
         if playingChannel?.streamURL == channel.streamURL, status == .starting || status == .playing { return }
         if channel.guideRef != playingChannel?.guideRef { upNext = [] }  // never show another channel's
         playingChannel = channel
@@ -166,6 +195,18 @@ typealias ChannelSection = TunerCore.Section
         }
         if currentSection == .favourites, !on { rows.removeAll { $0.streamURL == channel.streamURL } }
         if playingChannel?.streamURL == channel.streamURL { playingChannel?.isFavourite = on }
+        if var results = searchResults {
+            for index in results.channels.indices where results.channels[index].streamURL == channel.streamURL {
+                results.channels[index].isFavourite = on
+            }
+            for index in results.onNow.indices where results.onNow[index].channel.streamURL == channel.streamURL {
+                results.onNow[index].channel.isFavourite = on
+            }
+            for index in results.later.indices where results.later[index].channel.streamURL == channel.streamURL {
+                results.later[index].channel.isFavourite = on
+            }
+            searchResults = results
+        }
         let store = self.store
         Task {
             await Task.detached(priority: .userInitiated) {
@@ -175,10 +216,15 @@ typealias ChannelSection = TunerCore.Section
         }
     }
 
-    /// ⌘D: the selected channel.
+    /// ⌘D: the selected channel, or the selected result's channel while results show.
     func toggleFavouriteOnSelection() {
-        guard let id = selectedChannelID, let channel = rows.first(where: { $0.id == id }) else { return }
-        toggleFavourite(channel)
+        let channel: ChannelRow?
+        if searchResults != nil {
+            channel = selectedResultID.flatMap(searchResultChannel)
+        } else {
+            channel = selectedChannelID.flatMap { id in rows.first { $0.id == id } }
+        }
+        if let channel { toggleFavourite(channel) }
     }
 
     // MARK: Guide
@@ -247,6 +293,99 @@ typealias ChannelSection = TunerCore.Section
             guard !Task.isCancelled, let loaded, playingChannel?.guideRef == ref, loaded != upNext else { return }
             upNext = loaded
         }
+    }
+
+    // MARK: Search
+
+    /// ⌘F, or a letter typed in a list.
+    func requestSearchField() {
+        searchFieldRequests &+= 1
+    }
+
+    /// Return in the search field: acts on the selected result. Pressed before the results for the
+    /// text as typed are in, it acts on the first of those once they arrive, not on older results.
+    func submitSearch() {
+        if resultsText == currentSearchText {
+            if let id = selectedResultID { activateSearchResult(id) }
+        } else if Self.hasSearchTerms(currentSearchText) {
+            activateWhenSearched = true
+        }
+    }
+
+    /// Return or a double-click on a result. A programme on now, or a channel, plays that channel and
+    /// the results stay up; a later programme is shown in the details pane and playback is untouched.
+    func activateSearchResult(_ id: SearchResultID) {
+        if case .later = id {
+            if let hit = searchResultHit(id) { chosenProgramme = hit }
+        } else if let channel = searchResultChannel(id) {
+            play(channel)
+        }
+    }
+
+    private func searchResultHit(_ id: SearchResultID) -> ProgrammeHit? {
+        guard let results = searchResults else { return nil }
+        switch id {
+        case .onNow(let programmeID, let channelID):
+            return results.onNow.first { $0.programme.id == programmeID && $0.channel.id == channelID }
+        case .later(let programmeID, let channelID):
+            return results.later.first { $0.programme.id == programmeID && $0.channel.id == channelID }
+        case .channel:
+            return nil
+        }
+    }
+
+    private func searchResultChannel(_ id: SearchResultID) -> ChannelRow? {
+        if case .channel(let channelID) = id { return searchResults?.channels.first { $0.id == channelID } }
+        return searchResultHit(id)?.channel
+    }
+
+    /// After `searchPause` with no further change, searches the store off the main thread. A newer
+    /// change cancels a search still waiting. A store query already running cannot be stopped, so the
+    /// next one waits for it to finish: two never run at once. Results are applied only if the text is
+    /// still the text they were found for. Text with nothing to search for clears them at once.
+    private func scheduleSearch() {
+        searchLoad?.cancel()
+        searchLoad = nil
+        activateWhenSearched = false
+        let text = currentSearchText
+        guard Self.hasSearchTerms(text) else {
+            clearSearchResults()
+            return
+        }
+        let store = self.store
+        searchLoad = Task {
+            do { try await Task.sleep(for: Self.searchPause) } catch { return }
+            _ = await searchQuery?.value
+            guard !Task.isCancelled else { return }
+            let query = Task.detached(priority: .userInitiated) { try? store.search(text, at: Date()) }
+            searchQuery = query
+            let found = await query.value
+            if searchQuery == query { searchQuery = nil }  // finished: nothing to wait for, nothing kept
+            guard !Task.isCancelled, text == currentSearchText, let found else { return }  // a failed read keeps what is shown
+            apply(found, for: text)
+        }
+    }
+
+    /// The store searches runs of letters and digits, and finds nothing in text without any.
+    private static func hasSearchTerms(_ text: String) -> Bool {
+        text.contains { $0.isLetter || $0.isNumber }
+    }
+
+    private func apply(_ found: SearchResults, for text: String) {
+        searchResults = found
+        resultsText = text
+        selectedResultID = found.firstResultID
+        if activateWhenSearched {
+            activateWhenSearched = false
+            if let id = selectedResultID { activateSearchResult(id) }
+        }
+    }
+
+    private func clearSearchResults() {
+        resultsText = nil
+        if searchResults != nil { searchResults = nil }
+        if selectedResultID != nil { selectedResultID = nil }
+        if chosenProgramme != nil { chosenProgramme = nil }
     }
 
     // MARK: Lists
@@ -335,6 +474,7 @@ typealias ChannelSection = TunerCore.Section
         reloadHasChannels()
         reloadNowPlaying()
         if isGroupsExpanded { loadGroups() }
+        if searchResults != nil { scheduleSearch() }
     }
 
     nonisolated private static func add(
