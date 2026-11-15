@@ -62,6 +62,9 @@ struct PlayerPaneView: View {
             .overlay(alignment: .topLeading) {
                 if model.showsStats { StatsOverlay(readout: model.statsReadout) }
             }
+            .overlay(alignment: .bottomLeading) {
+                if isFullScreen { FullScreenBanner(model: model, idle: idle) }
+            }
     }
 
     /// Takes clicks before the AppKit video view does: a click focuses the pane, so F works, and a
@@ -118,6 +121,42 @@ private struct PlaybackStatusOverlay: View {
             .padding(24)
             .background(.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 12))
         }
+    }
+}
+
+/// Over the full-screen video while the pointer is moving: the channel, and its programme now. It
+/// shows on entering full screen and goes with the pointer, three seconds after the last movement.
+/// It alone watches the idle state and the guide, and takes no clicks.
+private struct FullScreenBanner: View {
+    let model: AppModel
+    let idle: IdleWatch
+
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            if !idle.isIdle, let channel = model.playingChannel {
+                let programme = channel.guideRef.flatMap { model.nowPlaying[$0] }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(channel.name)
+                        .font(programme == nil ? .title2.weight(.semibold) : .headline)
+                        .foregroundStyle(programme == nil ? .white : .white.opacity(0.75))
+                        .lineLimit(1)
+                    if let programme {
+                        Text(programme.title).font(.title2.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
+                        Text("\(programme.start.formatted(date: .omitted, time: .shortened)) – \(programme.stop.formatted(date: .omitted, time: .shortened))")
+                            .foregroundStyle(.white.opacity(0.75))
+                            .monospacedDigit()
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 12))
+                .padding(24)
+                .transition(.opacity)
+                .accessibilityElement(children: .combine)
+            }
+        }
+        .animation(.easeInOut(duration: 0.25), value: idle.isIdle)
+        .allowsHitTesting(false)
     }
 }
 
@@ -220,7 +259,7 @@ struct LiveBadge: View {
 }
 
 /// Notices three seconds without pointer movement over the full-screen video, then hides the pointer.
-/// Overlay controls over the video hide while `isIdle` is true. Its one timer exists only between
+/// The banner over the video hides while `isIdle` is true. Its one timer exists only between
 /// `start` and `stop`. The pointer is hidden only while it is over this window and Tuner is the
 /// active app, never on another display or over another app.
 @MainActor @Observable private final class IdleWatch {
