@@ -108,7 +108,7 @@ typealias ChannelSection = TunerCore.Section
 
     init(store: Store, message: String? = nil) {
         self.store = store
-        importer = ImportService(store: store)
+        importer = ImportService(store: store, session: Self.importSession())
         player = VLCPlayer()
         supervisor = PlaybackSupervisor(
             player: player, memory: BackgroundBufferMemory(store: store), now: Date.init)
@@ -128,6 +128,17 @@ typealias ChannelSection = TunerCore.Section
         }
         guard let store = try? Store.inMemory() else { return nil }
         return AppModel(store: store, message: "Library unavailable; nothing will be saved")
+    }
+
+    /// For playlist and guide downloads. Their URLs carry account credentials, so nothing of them may
+    /// reach a disk cache or a cookie store; and a download that trickles is cut off after ten minutes
+    /// rather than holding up this import, and every later one, indefinitely.
+    private static func importSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.httpCookieStorage = nil
+        configuration.timeoutIntervalForResource = 600
+        return URLSession(configuration: configuration)
     }
 
     // MARK: Playback
