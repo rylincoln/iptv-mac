@@ -99,7 +99,7 @@ import VLCKit
 
     var stats: PlayerStats {
         // Until the first event of this play call the media has no input, and VLCKit then returns
-        // uninitialised memory as statistics. Even after it, the bitrate (a float, in bytes per
+        // uninitialised memory as statistics. Even after it, the bitrate (a float, in kilobytes per
         // millisecond) is sanitised, so the overlay's whole-number reading can never trap.
         guard let media, lastEvent != .none else { return .zero }
         let counters = media.statistics
