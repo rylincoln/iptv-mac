@@ -9,6 +9,11 @@ import Synchronization
 /// downloads run at once; a request whose row scrolls away is cancelled, in the queue or on the wire;
 /// a URL that failed is not tried again this session. Logo URLs come from the playlist and are never
 /// logged.
+///
+/// A download is bounded in memory and time, because the URLs are untrusted: the body is read as a
+/// stream and the request is cancelled, closing the connection, as soon as the declared length or the
+/// bytes received pass `maxDownloadBytes`; the whole transfer, however slowly it trickles, is cut off
+/// after `timeoutIntervalForResource`. Either way the download slot is freed and the URL is a miss.
 final class LogoCache: @unchecked Sendable {  // NSCache, Mutex and the actor are thread-safe; the rest is immutable
     /// The size rows draw logos at.
     static let pointSize: CGFloat = 32
@@ -39,7 +44,8 @@ final class LogoCache: @unchecked Sendable {  // NSCache, Mutex and the actor ar
         let configuration = URLSessionConfiguration.default
         configuration.urlCache = URLCache(memoryCapacity: 0, diskCapacity: Self.diskBytes, directory: directory)
         configuration.requestCachePolicy = .returnCacheDataElseLoad  // logos rarely change; spare the network
-        configuration.timeoutIntervalForRequest = 15
+        configuration.timeoutIntervalForRequest = 15   // the longest gap between packets
+        configuration.timeoutIntervalForResource = 30  // the longest a whole logo may take
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
         configuration.urlCredentialStorage = nil
@@ -77,21 +83,36 @@ final class LogoCache: @unchecked Sendable {  // NSCache, Mutex and the actor ar
         return image
     }
 
-    /// The body of a successful response, or nil on any failure. Throws only when cancelled.
+    /// The body of a successful response, or nil on any failure, including a body over the size cap.
+    /// Throws only when cancelled. The download slot is released on every path.
     private func download(_ url: URL) async throws -> Data? {
         try await gate.acquire()
+        let body: Data?
         do {
-            let (data, response) = try await session.data(from: url)
-            await gate.release()
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
-                  data.count <= Self.maxDownloadBytes
-            else { return nil }
-            return data
+            body = try await fetch(url)
         } catch {
             await gate.release()
             if Task.isCancelled { throw CancellationError() }
             return nil
         }
+        await gate.release()
+        return body
+    }
+
+    /// Reads at most `maxDownloadBytes`. Returning or throwing early drops the byte stream, which
+    /// cancels the request and closes the connection.
+    private func fetch(_ url: URL) async throws -> Data? {
+        let (bytes, response) = try await session.bytes(from: url)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
+        let expected = http.expectedContentLength  // -1 when unknown
+        if expected > Self.maxDownloadBytes { return nil }
+        var data = Data()
+        data.reserveCapacity(expected > 0 ? Int(expected) : 64 * 1024)
+        for try await byte in bytes {
+            if data.count >= Self.maxDownloadBytes { return nil }  // one more byte than the cap
+            data.append(byte)
+        }
+        return data
     }
 
     /// Decodes straight to a thumbnail no larger than `pixelSize`, so a full-size logo is never held.
