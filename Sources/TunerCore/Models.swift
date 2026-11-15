@@ -1,3 +1,5 @@
+import Foundation
+
 public struct ParsedChannel: Equatable, Sendable {
     public var name: String
     public var tvgID: String?
@@ -34,5 +36,58 @@ public struct M3UParseResult: Equatable, Sendable {
     public init(channels: [ParsedChannel], skippedCount: Int) {
         self.channels = channels
         self.skippedCount = skippedCount
+    }
+}
+
+public struct ParsedGuideChannel: Equatable, Sendable {
+    public var id: String
+    public var displayNames: [String]
+    public var iconURL: String?
+
+    public init(id: String, displayNames: [String], iconURL: String? = nil) {
+        self.id = id
+        self.displayNames = displayNames
+        self.iconURL = iconURL
+    }
+}
+
+public struct ParsedProgramme: Equatable, Sendable {
+    public var channelID: String
+    public var start: Date
+    public var stop: Date
+    public var title: String
+    public var subTitle: String?
+    public var desc: String?
+    public var categories: [String]
+
+    public init(
+        channelID: String,
+        start: Date,
+        stop: Date,
+        title: String,
+        subTitle: String? = nil,
+        desc: String? = nil,
+        categories: [String] = []
+    ) {
+        self.channelID = channelID
+        self.start = start
+        self.stop = stop
+        self.title = title
+        self.subTitle = subTitle
+        self.desc = desc
+        self.categories = categories
+    }
+}
+
+public struct XMLTVSummary: Equatable, Sendable {
+    public var channels: Int
+    public var programmes: Int
+    /// Channels without an id and programmes that are missing a channel, title or valid times.
+    public var skipped: Int
+
+    public init(channels: Int, programmes: Int, skipped: Int) {
+        self.channels = channels
+        self.programmes = programmes
+        self.skipped = skipped
     }
 }
