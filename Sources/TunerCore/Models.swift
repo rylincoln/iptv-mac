@@ -128,3 +128,20 @@ public struct ProgrammeRow: Identifiable, Equatable, Sendable {
     public var desc: String?
     public var isSport: Bool
 }
+
+public struct ProgrammeHit: Identifiable, Equatable, Sendable {
+    public var programme: ProgrammeRow
+    public var channel: ChannelRow
+    public var id: String { "\(programme.id)-\(channel.id)" }
+}
+
+public struct SearchResults: Equatable, Sendable {
+    /// start <= at < stop, ordered by channel sortIndex.
+    public var onNow: [ProgrammeHit]
+    /// at < start <= at + 7 days, ordered by start.
+    public var later: [ProgrammeHit]
+    /// Name matches, ordered by sortIndex.
+    public var channels: [ChannelRow]
+
+    public static let empty = SearchResults(onNow: [], later: [], channels: [])
+}
