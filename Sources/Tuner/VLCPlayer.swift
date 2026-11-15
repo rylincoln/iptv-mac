@@ -9,9 +9,14 @@ import VLCKit
 /// advancing, `.buffering` only when VLCKit says buffering and nothing has advanced since the
 /// previous reading, and `.ended` / `.error` as VLCKit reports them.
 ///
-/// VLCKit delivers its events asynchronously on the main queue, so events from the previous stream
-/// can still arrive after `play` returns. Each `play` queues a fence behind them and ignores every
-/// event until the fence has run.
+/// VLCKit delivers its events on the main queue, and stops a stream and swaps media asynchronously
+/// (`libvlc_media_player_stop_async`, `libvlc_media_player_set_media_async`), so events from the
+/// stream being left can still arrive after `play` returns, some after the new stream's own. Each
+/// `play` queues a fence behind the events already queued and ignores them; after it, nothing but an
+/// Opening is taken until this play call has opened. What is left: on a very fast change of channel
+/// the previous stream's own Opening can come late and be taken for this one's. Statistics read
+/// before this stream has its input are then garbage (the bitrate is sanitised regardless) until the
+/// stream opens, a few milliseconds later.
 @MainActor final class VLCPlayer: NSObject, Player {
     let videoView: NSView
 
@@ -28,7 +33,8 @@ import VLCKit
     private var generation = 0
     private var acceptingEvents = false
     private var lastEvent = EngineEvent.none
-    /// An Opening event was accepted for the current play call, so libVLC has made its input.
+    /// An Opening event was accepted for the current play call, so libVLC has made its input. Until
+    /// then no other event is taken (see the type's comment).
     private var hasOpened = false
     private var positionMs: Int64 = 0
     private var sample = PlayerStats.zero      // counters at the previous reading
@@ -144,7 +150,10 @@ import VLCKit
     fileprivate func engineStateChanged() {
         guard acceptingEvents, let engine else { return }
         if lastEvent == .ended || lastEvent == .error { return }  // final for this play call
-        switch engine.state {
+        let state = engine.state
+        // A late Ended or Error of the stream being left would otherwise fail this one's start.
+        guard hasOpened || state == .opening else { return }
+        switch state {
         case .opening:
             lastEvent = .opening
             hasOpened = true
@@ -152,13 +161,13 @@ import VLCKit
         case .playing, .esAdded, .paused: lastEvent = .running
         case .ended: lastEvent = .ended
         case .error: lastEvent = .error
-        case .stopped: break  // only our own stop produces this, and it comes before the fence
+        case .stopped: break  // never this play call's: `stop` turns events off before stopping
         @unknown default: break
         }
     }
 
     fileprivate func engineTimeChanged() {
-        guard acceptingEvents, let engine else { return }
+        guard acceptingEvents, hasOpened, let engine else { return }  // not the stream being left's time
         positionMs = Int64(engine.time.intValue)
     }
 }
