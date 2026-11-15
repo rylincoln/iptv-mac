@@ -120,6 +120,11 @@ typealias ChannelSection = TunerCore.Section
     @ObservationIgnored private var searchQuery: Task<SearchResults?, Never>?
     /// The text `searchResults` were found for.
     @ObservationIgnored private var resultsText: String?
+    /// Counts the searches `scheduleSearch` has started.
+    @ObservationIgnored private var searchesStarted: UInt64 = 0
+    /// The search `scheduleSearch` started, while it waits or runs; it marks itself done. A refresh of
+    /// the results shown leaves it alone (`refreshSearchResults`).
+    @ObservationIgnored private var searchUnderWay: UInt64?
     /// Return was pressed in the search field before the results for its text were in.
     @ObservationIgnored private var activateWhenSearched = false
     /// Deletes what an import cut short by a quit or a crash left in the temporary folder. Started at
@@ -538,6 +543,7 @@ typealias ChannelSection = TunerCore.Section
     private func scheduleSearch() {
         searchLoad?.cancel()
         searchLoad = nil
+        searchUnderWay = nil
         activateWhenSearched = false
         let text = currentSearchText
         guard Self.hasSearchTerms(text) else {
@@ -545,7 +551,12 @@ typealias ChannelSection = TunerCore.Section
             return
         }
         let store = self.store
+        searchesStarted &+= 1
+        let search = searchesStarted
+        searchUnderWay = search
         searchLoad = Task {
+            // Marked done however it ends; a search cancelled for a newer one leaves the newer one's mark.
+            defer { if searchUnderWay == search { searchUnderWay = nil } }
             do { try await Task.sleep(for: Self.searchPause) } catch { return }
             _ = await searchQuery?.value
             guard !Task.isCancelled else { return }
@@ -555,6 +566,7 @@ typealias ChannelSection = TunerCore.Section
             let found = await query.value
             if searchQuery == query { searchQuery = nil }  // finished: nothing to wait for, nothing kept
             guard !Task.isCancelled, text == currentSearchText, let found else { return }  // a failed read keeps what is shown
+            searchUnderWay = nil  // done, so the refresh below may run
             apply(found, for: text)
             if favouriteWrites.check(.search, since: ticket) == .readAgainNow { refreshSearchResults() }
         }
@@ -565,9 +577,12 @@ typealias ChannelSection = TunerCore.Section
     /// change nothing. Others replace them with the selection kept where it can be
     /// (`SearchResults.selection(following:in:)`) and the list left where it is scrolled. A search for
     /// newly typed text cancels this, and as with every search, a store query never starts while
-    /// another runs.
+    /// another runs. While a search `scheduleSearch` started waits or runs, this does nothing: that
+    /// search reads the store afresh anyway, and it may be the one an import starts once it has
+    /// reassigned every id, which a refresh, keeping the selection by the old ids, must not cancel.
     private func refreshSearchResults() {
-        guard searchResults != nil, let text = resultsText, text == currentSearchText else { return }
+        guard searchUnderWay == nil, searchResults != nil, let text = resultsText, text == currentSearchText
+        else { return }
         searchLoad?.cancel()
         let store = self.store
         searchLoad = Task {
