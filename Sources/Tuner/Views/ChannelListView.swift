@@ -83,21 +83,36 @@ struct ChannelListView: View {
                 }
             }
         } primaryAction: { ids in
-            if let channel = channel(in: ids) { model.play(channel) }
+            guard !coveredNow, let channel = channel(in: ids) else { return }
+            model.play(channel)
         }
         .onKeyPress(.return) {
-            // Covered, the list plays nothing, even if a key reaches it before focus has moved on.
-            guard !covered, let id = model.selectedChannelID, let channel = channel(in: [id]) else { return .ignored }
+            guard !coveredNow, let id = model.selectedChannelID, let channel = channel(in: [id]) else { return .ignored }
             model.play(channel)
             return .handled
         }
         .typingStartsSearch(model: model, focus: focus)
+        // A key can still reach the list just after it is covered: results that come in as it is
+        // clicked cover it at once, but the keyboard moves on to them only on the next turn, and a key
+        // already queued is delivered first. Such a key does nothing here. Ignored, it would go on to
+        // the table itself, which moves its selection for an arrow, or plays it for Return (the primary
+        // action). Escape and Tab go on as usual: they act on no row.
+        .onKeyPress(phases: [.down, .repeat]) { press in
+            coveredNow && !Self.passedOn.contains(press.key.character) ? .handled : .ignored
+        }
         .overlay {
             if model.rows.isEmpty {
                 Text(emptyText).foregroundStyle(.secondary)
             }
         }
     }
+
+    /// Covered at this moment. Key handlers read this, not `covered`, which is from the list's last
+    /// update and may predate the results that cover it.
+    private var coveredNow: Bool { model.searchResults != nil || !model.hasChannels }
+
+    /// Keys a covered list passes on: Escape (leave the search) and Tab and Shift-Tab (move on).
+    private static let passedOn: Set<Character> = ["\u{1B}", "\t", "\u{19}"]
 
     /// The one listed channel the ids name, if they name exactly one.
     private func channel(in ids: Set<Int64>) -> ChannelRow? {
