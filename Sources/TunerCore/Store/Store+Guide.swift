@@ -1,9 +1,25 @@
 import Foundation
 import GRDB
 
+/// Takes a guide's rows as they are read, channels first: a programme is stored only when its channel
+/// was added before it (XMLTV lists every `<channel>` before any `<programme>`). A programme whose channel
+/// has not been added is dropped and counted in `GuideWriteCounts.programmesWithoutChannel`.
 public protocol GuideWriter {
     func add(_ c: ParsedGuideChannel) throws
     func add(_ p: ParsedProgramme) throws
+}
+
+/// What `replaceGuide` kept of the programmes it was given.
+public struct GuideWriteCounts: Equatable, Sendable {
+    /// Programmes stored. One that ended more than 24 hours before the import's `now` is not.
+    public var programmes: Int
+    /// Programmes dropped because no channel with their id had been added before them.
+    public var programmesWithoutChannel: Int
+
+    public init(programmes: Int, programmesWithoutChannel: Int) {
+        self.programmes = programmes
+        self.programmesWithoutChannel = programmesWithoutChannel
+    }
 }
 
 /// Inserts rows as they arrive through reused prepared statements; only the channel id to ref
@@ -15,6 +31,7 @@ private final class StatementGuideWriter: GuideWriter {
     private let sourceID: Int64
     private let cutoff: Int64
     private var refs: [String: Int64] = [:]
+    private(set) var counts = GuideWriteCounts(programmes: 0, programmesWithoutChannel: 0)
 
     init(db: Database, sourceID: Int64, cutoff: Int64) throws {
         self.db = db
@@ -38,7 +55,10 @@ private final class StatementGuideWriter: GuideWriter {
     }
 
     func add(_ p: ParsedProgramme) throws {
-        guard let ref = refs[p.channelID] else { return }
+        guard let ref = refs[p.channelID] else {
+            counts.programmesWithoutChannel += 1
+            return
+        }
         let stop = Int64(p.stop.timeIntervalSince1970)
         // Already past the retention window: never stored, same result as pruning afterwards.
         guard stop >= cutoff else { return }
@@ -46,6 +66,7 @@ private final class StatementGuideWriter: GuideWriter {
             ref, Int64(p.start.timeIntervalSince1970), stop, p.title, p.subTitle, p.desc,
             SportsClassifier.isSportsCategory(p.categories),
         ])
+        counts.programmes += 1
     }
 }
 
@@ -53,19 +74,25 @@ extension Store {
     /// One transaction: delete this source's guide data, run `load`, drop programmes that ended more than
     /// 24 hours before `now`, rebuild the programme search index, re-run matching for every channel.
     /// If `load` throws, nothing changes.
-    public func replaceGuide(sourceID: Int64, now: Date, load: (GuideWriter) throws -> Void) throws {
+    @discardableResult
+    public func replaceGuide(
+        sourceID: Int64, now: Date, load: (GuideWriter) throws -> Void
+    ) throws -> GuideWriteCounts {
         let cutoff = Int64(now.timeIntervalSince1970) - 24 * 3600
-        try db.write { db in
+        return try db.write { db in
             try db.execute(sql: """
                 DELETE FROM programme WHERE guideRef IN (
                     SELECT ref FROM guideChannel WHERE sourceID = ?)
                 """, arguments: [sourceID])
             try db.execute(sql: "DELETE FROM guideChannel WHERE sourceID = ?", arguments: [sourceID])
-            try load(StatementGuideWriter(db: db, sourceID: sourceID, cutoff: cutoff))
+            let writer = try StatementGuideWriter(db: db, sourceID: sourceID, cutoff: cutoff)
+            try load(writer)
+            // Only other sources' rows: this source's expired programmes were never stored.
             try db.execute(
                 sql: "DELETE FROM programme WHERE start < ? AND stop < ?", arguments: [cutoff, cutoff])
             try db.execute(sql: "INSERT INTO programme_fts(programme_fts) VALUES ('rebuild')")
             try Self.rematch(db)
+            return writer.counts
         }
     }
 
@@ -128,6 +155,9 @@ extension Store {
         }
     }
 
+    /// Programmes on `guideRef` starting at or after `after` (`start >= after`), earliest first. A
+    /// programme starting exactly at `after` is included: callers pass the current programme's stop, and
+    /// the next programme starts then.
     public func upcoming(guideRef: Int64, after: Date, limit: Int) throws -> [ProgrammeRow] {
         try db.read { db in
             try Row.fetchAll(db, sql: """

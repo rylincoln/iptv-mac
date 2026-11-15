@@ -21,6 +21,9 @@ extension Store {
         }
     }
 
+    /// Every source this version knows how to import. A row of a kind it does not know (written by a
+    /// later version, say) is left out rather than failing the whole list: it could not be imported or
+    /// shown anyway, and the other sources stay usable.
     public func sources() throws -> [SourceRow] {
         try db.read { db in
             try Row.fetchAll(db, sql: """
@@ -41,6 +44,9 @@ extension Store {
     }
 
     /// `retryAt`: the time before which the provider must not be asked again, or nil for none.
+    /// An id with no source row changes nothing and is not an error: the importer reads the row just
+    /// before, so the source can only be missing if it was removed meanwhile, and then there is nothing
+    /// left to record against.
     public func recordRefresh(
         sourceID: Int64, etag: String?, itemCount: Int, skippedCount: Int, error: String?, at: Date,
         retryAt: Date? = nil

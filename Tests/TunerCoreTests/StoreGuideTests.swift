@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 import Testing
 @testable import TunerCore
 
@@ -143,6 +144,82 @@ private func pc(_ name: String, _ path: String, tvgID: String? = nil, group: Str
             prog("ghost", 0, 1, "Ghost"), prog("alpha", 0, 1, "Real"),
         ])
         #expect(try store.nowPlaying(at: at(0.5)).values.map(\.title) == ["Real"])
+    }
+
+    /// Channels first: a programme whose channel has not been added yet is not stored, and is counted.
+    @Test func programmeBeforeItsChannelIsDroppedAndCounted() throws {
+        let store = try Store.inMemory()
+        let id = try store.addSource(kind: .guide, location: "http://example.invalid/guide")
+        let counts = try store.replaceGuide(sourceID: id, now: now) { writer in
+            try writer.add(prog("alpha", 0, 1, "Early"))
+            try writer.add(guideChannel("alpha", "Alpha"))
+            try writer.add(prog("alpha", 1, 2, "Late"))
+            try writer.add(prog("ghost", 0, 1, "Ghost"))
+        }
+        #expect(counts == GuideWriteCounts(programmes: 1, programmesWithoutChannel: 2))
+        #expect(try store.nowPlaying(at: at(1.5)).values.map(\.title) == ["Late"])
+        #expect(try store.nowPlaying(at: at(0.5)).isEmpty)
+    }
+
+    /// Programmes past the retention window are neither stored nor counted as stored.
+    @Test func countsLeaveOutExpiredProgrammes() throws {
+        let store = try Store.inMemory()
+        let id = try store.addSource(kind: .guide, location: "http://example.invalid/guide")
+        let counts = try store.replaceGuide(sourceID: id, now: now) { writer in
+            try writer.add(guideChannel("alpha", "Alpha"))
+            try writer.add(prog("alpha", -26, -25, "Old"))
+            try writer.add(prog("alpha", 0, 1, "Current"))
+        }
+        #expect(counts == GuideWriteCounts(programmes: 1, programmesWithoutChannel: 0))
+    }
+
+    /// Callers pass the current programme's stop; the next one starts exactly then.
+    @Test func upcomingIncludesAProgrammeStartingExactlyAtAfter() throws {
+        let store = try Store.inMemory()
+        _ = try playlist(store, [pc("Alpha", "a")])
+        _ = try loadGuide(store, channels: [guideChannel("alpha", "Alpha")], programmes: [
+            prog("alpha", 0, 1, "Current"), prog("alpha", 1, 2, "Next"),
+        ])
+        let ref = try #require(try store.channels(in: .all, at: now).first?.guideRef)
+        let current = try #require(try store.nowPlaying(at: at(0.5))[ref])
+        #expect(try store.upcoming(guideRef: ref, after: current.stop, limit: 5).map(\.title) == ["Next"])
+    }
+
+    @Test func idMatchBeatsNameMatch() throws {
+        let store = try Store.inMemory()
+        _ = try playlist(store, [pc("Bravo", "b", tvgID: "alpha.id")])
+        _ = try loadGuide(store, channels: [
+            guideChannel("alpha.id", "Something Else"), guideChannel("bravo.id", "Bravo"),
+        ], programmes: [prog("alpha.id", 0, 1, "By id"), prog("bravo.id", 0, 1, "By name")])
+        let ref = try #require(try store.channels(in: .all, at: now).first?.guideRef)
+        #expect(try store.nowPlaying(at: at(0.5))[ref]?.title == "By id")
+        let kind = try store.db.read { try String.fetchOne($0, sql: "SELECT matchKind FROM channel") }
+        #expect(kind == MatchKind.id.rawValue)
+    }
+
+    @Test func reimportedGuideWithoutTheChannelClearsTheLink() throws {
+        let store = try Store.inMemory()
+        _ = try playlist(store, [pc("Alpha", "a")])
+        let id = try loadGuide(store, channels: [guideChannel("alpha", "Alpha")])
+        #expect(try store.channels(in: .all, at: now).first?.guideRef != nil)
+        try store.replaceGuide(sourceID: id, now: now) { writer in
+            try writer.add(guideChannel("beta", "Beta"))
+        }
+        #expect(try store.channels(in: .all, at: now).first?.guideRef == nil)
+        let kind = try store.db.read { try String.fetchOne($0, sql: "SELECT matchKind FROM channel") }
+        #expect(kind == nil)
+    }
+
+    @Test func sportsSectionIsInPlaylistOrder() throws {
+        let store = try Store.inMemory()
+        _ = try playlist(store, [
+            pc("Zulu", "z", group: "Sports"), pc("Alpha", "a", group: "News"), pc("Mike", "m", group: "Sports"),
+            pc("Kilo", "k", group: "News"),
+        ])
+        _ = try loadGuide(store, channels: [guideChannel("alpha", "Alpha")], programmes: [
+            prog("alpha", 0, 1, "Match", categories: ["Football"]),
+        ])
+        #expect(try store.channels(in: .sports, at: at(0.5)).map(\.name) == ["Zulu", "Alpha", "Mike"])
     }
 
     @Test func sportsSectionIncludesChannelAiringSportNow() throws {

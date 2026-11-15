@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 import Testing
 @testable import TunerCore
 
@@ -16,6 +17,13 @@ private func seeded(_ channels: [ParsedChannel]) throws -> (Store, Int64) {
 }
 
 private let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+/// Every row in the recent table, vanished channels included, newest first.
+private func recentRows(_ store: Store) throws -> [String] {
+    try store.db.read { db in
+        try String.fetchAll(db, sql: "SELECT streamURL FROM recent ORDER BY lastWatchedAt DESC")
+    }
+}
 
 @Suite struct StoreChannelsTests {
     @Test func importAndListAll() throws {
@@ -49,6 +57,24 @@ private let now = Date(timeIntervalSince1970: 1_800_000_000)
         #expect(row.skippedCount == 2)
         #expect(row.lastError == nil)
         #expect(row.lastRefreshAt == now)
+    }
+
+    /// Written by a later version, say: left out, so the sources this version knows stay usable.
+    @Test func sourcesLeavesOutARowOfAnUnknownKind() throws {
+        let store = try Store.inMemory()
+        let id = try store.addSource(kind: .playlist, location: "http://example.invalid/list")
+        try store.db.write { db in
+            try db.execute(sql: "INSERT INTO source(kind, location) VALUES ('podcast', 'http://example.invalid/pod')")
+        }
+        #expect(try store.sources().map(\.id) == [id])
+    }
+
+    @Test func recordRefreshOfAMissingSourceChangesNothing() throws {
+        let store = try Store.inMemory()
+        let id = try store.addSource(kind: .playlist, location: "http://example.invalid/list")
+        let before = try store.sources()
+        try store.recordRefresh(sourceID: id + 100, etag: "e", itemCount: 9, skippedCount: 9, error: "x", at: now)
+        #expect(try store.sources() == before)
     }
 
     @Test func groupsAreDistinctAndSorted() throws {
@@ -88,6 +114,14 @@ private let now = Date(timeIntervalSince1970: 1_800_000_000)
         let again = try #require(try store.channels(in: .all, at: now).first)
         try store.setFavourite(false, streamURL: again.streamURL, name: again.name)
         #expect(try store.channels(in: .favourites, at: now).isEmpty)
+    }
+
+    @Test func favouritesAreOrderedByNameIgnoringCase() throws {
+        let (store, _) = try seeded([ch("b", "b"), ch("C", "c"), ch("A", "a"), ch("x", "x")])
+        for row in try store.channels(in: .all, at: now) where row.name != "x" {
+            try store.setFavourite(true, streamURL: row.streamURL, name: row.name)
+        }
+        #expect(try store.channels(in: .favourites, at: now).map(\.name) == ["A", "b", "C"])
     }
 
     @Test func favouriteFollowsRenamedURLByName() throws {
@@ -210,6 +244,37 @@ private let now = Date(timeIntervalSince1970: 1_800_000_000)
         #expect(recents.count == 30)
         #expect(recents.first?.name == "Ch34")
         #expect(recents.last?.name == "Ch5")
+    }
+
+    @Test func recentsKeepTheNewestHundredRows() throws {
+        let channels = (0..<101).map { ch("Ch\($0)", "\($0)") }
+        let (store, _) = try seeded(channels)
+        for (i, channel) in channels.enumerated() {
+            try store.recordWatched(
+                streamURL: channel.streamURL, name: channel.name, at: Date(timeIntervalSince1970: 1_000 + Double(i)))
+        }
+        let kept = try recentRows(store)
+        #expect(kept.count == 100)
+        #expect(!kept.contains(url("0")))  // the oldest went
+        #expect(kept.first == url("100"))
+    }
+
+    /// A vanished channel's row is kept, so it can come back with a later import (spec 7.7: favourites and
+    /// recents follow a channel by URL, then by name). It counts toward the cap like any other row, so the
+    /// table stays bounded however many channels vanish.
+    @Test func vanishedRecentsCountTowardTheCap() throws {
+        let channels = (0..<101).map { ch("Ch\($0)", "\($0)") }
+        let (store, id) = try seeded(channels)
+        try store.recordWatched(streamURL: url("0"), name: "Ch0", at: Date(timeIntervalSince1970: 1_000))
+        try store.replaceChannels(sourceID: id, with: Array(channels.dropFirst()))  // Ch0 vanishes
+        #expect(try recentRows(store) == [url("0")])
+        for (i, channel) in channels.dropFirst().enumerated() {
+            try store.recordWatched(
+                streamURL: channel.streamURL, name: channel.name, at: Date(timeIntervalSince1970: 2_000 + Double(i)))
+        }
+        let kept = try recentRows(store)
+        #expect(kept.count == 100)
+        #expect(!kept.contains(url("0")))
     }
 
     @Test func recordWatchedTwiceKeepsOneRow() throws {
