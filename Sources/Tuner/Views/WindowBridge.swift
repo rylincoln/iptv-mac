@@ -115,7 +115,9 @@ final class WindowBridgeView: NSView {
     }
 
     private func transitionWillBegin() {
-        if !inTransition { transitionStartedAt = ProcessInfo.processInfo.systemUptime }
+        // Timed from here every time: a transition that never ended may have left `inTransition` set,
+        // and this one must not inherit its start.
+        transitionStartedAt = ProcessInfo.processInfo.systemUptime
         inTransition = true
         transitionBegan = true
     }
