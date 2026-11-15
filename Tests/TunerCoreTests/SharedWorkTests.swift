@@ -29,9 +29,9 @@ private final class Counter: Sendable {
 
 private struct Failure: Error, Equatable {}
 
-/// Waits, yielding, until `condition` holds; the suite's time limit stops a wait that never ends.
+/// Waits until `condition` holds, or until the test is cancelled by the suite's time limit.
 private func waitUntil(_ condition: () -> Bool) async {
-    while !condition() { try? await Task.sleep(for: .milliseconds(1)) }
+    while !condition(), !Task.isCancelled { try? await Task.sleep(for: .milliseconds(1)) }
 }
 
 /// Sleeps until cancelled, noting that it was.

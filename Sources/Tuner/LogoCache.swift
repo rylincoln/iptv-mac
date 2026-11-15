@@ -17,10 +17,11 @@ import TunerCore
 /// is dropped when its turn comes. Any other failed transfer (offline, timed out, cut off) is tried
 /// again when its row next shows. Logo URLs come from the playlist and are never logged.
 ///
-/// A download is bounded in memory and time, because the URLs are untrusted: the body is read as a
-/// stream and the request is cancelled, closing the connection, as soon as the declared length or the
-/// bytes received pass `maxDownloadBytes` (a miss); the whole transfer, however slowly it trickles, is
-/// cut off after `timeoutIntervalForResource` (a failed transfer). Either way the download slot is freed.
+/// A download is bounded in memory and time, because the URLs are untrusted: the body is taken a chunk
+/// at a time as it arrives, and the request is cancelled, closing the connection, as soon as the
+/// declared length or the bytes received pass `maxDownloadBytes`, exactly (a miss; `CappedDownload`).
+/// The whole transfer, however slowly it trickles, is cut off after `timeoutIntervalForResource`: a
+/// timeout, so a failed transfer, not a miss. Either way the download slot is freed.
 final class LogoCache: @unchecked Sendable {  // NSCache, Mutex and the actor are thread-safe; the rest is immutable
     /// The size rows draw logos at.
     static let pointSize: CGFloat = 32
@@ -121,29 +122,13 @@ final class LogoCache: @unchecked Sendable {  // NSCache, Mutex and the actor ar
         }
         let body: Data?
         do {
-            body = try await fetch(url)
+            body = try await CappedDownload.body(from: url, session: session, limit: Self.maxDownloadBytes)
         } catch {
             await gate.release()
             throw error
         }
         await gate.release()
         return body
-    }
-
-    /// Reads at most `maxDownloadBytes`. Returning or throwing early drops the byte stream, which
-    /// cancels the request and closes the connection.
-    private func fetch(_ url: URL) async throws -> Data? {
-        let (bytes, response) = try await session.bytes(from: url)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
-        let expected = http.expectedContentLength  // -1 when unknown
-        if expected > Self.maxDownloadBytes { return nil }
-        var data = Data()
-        data.reserveCapacity(expected > 0 ? Int(expected) : 64 * 1024)
-        for try await byte in bytes {
-            if data.count >= Self.maxDownloadBytes { return nil }  // one more byte than the cap
-            data.append(byte)
-        }
-        return data
     }
 
     /// Decodes straight to a thumbnail no larger than `pixelSize`, so a full-size logo is never held.
