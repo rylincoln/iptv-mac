@@ -4,10 +4,8 @@ import VLCKit
 
 /// The app's one VLCKit player, so there is never more than one stream open.
 ///
-/// VLCKit's own state cannot be trusted as "is it playing": on a healthy live stream it sticks at
-/// buffering for the whole session. So `state` reports `.playing` while the media is actually
-/// advancing, `.buffering` only when VLCKit says buffering and nothing has advanced since the
-/// previous reading, and `.ended` / `.error` as VLCKit reports them.
+/// What a stream is doing is worked out by `PlaybackProgress`, from VLCKit's events and counters;
+/// VLCKit's own state cannot be trusted as "is it playing".
 ///
 /// VLCKit queues its events straight onto the main queue. Stopping a stream
 /// (`libvlc_media_player_stop_async`) detaches that stream's event callbacks before it returns, so
@@ -19,27 +17,14 @@ import VLCKit
 @MainActor final class VLCPlayer: NSObject, Player {
     let videoView: NSView
 
-    /// Readings closer together than this reuse the previous verdict, so two reads in a row never
-    /// look like a stall.
-    private static let minSampleInterval: TimeInterval = 0.5
-
-    /// The last VLCKit state event accepted for the current play call.
-    private enum EngineEvent { case none, opening, buffering, running, ended, error }
-
     private let vlcView: VLCVideoView
     private var engine: VLCMediaPlayer?       // created on the first play, so launch does not start libVLC
     private var media: VLCMedia?              // the current play call's media; nil when stopped
     private var generation = 0
     private var acceptingEvents = false
-    private var lastEvent = EngineEvent.none
-    /// An Opening event was accepted for the current play call, so libVLC has made its input. Until
-    /// then no other event is taken (see the type's comment).
-    private var hasOpened = false
+    /// The current play call's events and counters, and what they add up to.
+    private var progress = PlaybackProgress(startedAt: 0)
     private var positionMs: Int64 = 0
-    private var sample = PlayerStats.zero      // counters at the previous reading
-    private var sampledAt: TimeInterval = 0
-    private var advancing = false
-    private var hasAdvanced = false
     private var volumeLevel = 100
 
     override init() {
@@ -65,7 +50,7 @@ import VLCKit
         let media = VLCMedia(url: url)
         media.addOption(":network-caching=\(max(0, bufferMs))")
         self.media = media
-        sampledAt = ProcessInfo.processInfo.systemUptime
+        progress = PlaybackProgress(startedAt: ProcessInfo.processInfo.systemUptime)
         engine.media = media
         engine.play()
     }
@@ -75,12 +60,8 @@ import VLCKit
         acceptingEvents = false
         if media != nil { engine?.stop() }
         media = nil
-        lastEvent = .none
-        hasOpened = false
+        progress = PlaybackProgress(startedAt: 0)
         positionMs = 0
-        sample = .zero
-        advancing = false
-        hasAdvanced = false
     }
 
     var volume: Int {
@@ -91,28 +72,29 @@ import VLCKit
         }
     }
 
-    var state: PlayerState {
+    func sampleState() -> PlayerState {
         guard media != nil else { return .idle }
-        switch lastEvent {
-        case .none: return .opening
-        case .ended: return .ended
-        case .error: return .error
-        case .opening, .buffering, .running: break
-        }
-        sampleProgress()
-        if advancing { return .playing }
-        if lastEvent == .buffering { return .buffering }
-        return hasAdvanced ? .playing : .opening
+        // `progress` asks for the counters only once an Opening has been taken, and must not be read
+        // again from inside its own call: hence `counters`, not `stats`.
+        return progress.state(
+            at: ProcessInfo.processInfo.systemUptime,
+            counters: { counters() },
+            enginePlaying: { engine?.isPlaying == true })
     }
 
     var stats: PlayerStats {
         // Until this play call's Opening event the media has no input, and VLCKit then returns
         // uninitialised memory as statistics. Opening, not just any event: a late event of the
         // previous stream is no proof. VLCKit 3.7 sends Opening first, within milliseconds of
-        // `play`, for live streams and failing ones alike. Even after it, the bitrate
-        // (a float, in kilobytes per millisecond) is sanitised, so the overlay's whole-number reading
-        // can never trap.
-        guard let media, hasOpened else { return .zero }
+        // `play`, for live streams and failing ones alike.
+        progress.hasOpened ? counters() : .zero
+    }
+
+    /// The media's counters. Meaningful only after Opening (see `stats`). Even then the bitrate (a
+    /// float, in kilobytes per millisecond) is sanitised, so the overlay's whole-number reading can
+    /// never trap.
+    private func counters() -> PlayerStats {
+        guard let media else { return .zero }
         let counters = media.statistics
         return PlayerStats(
             positionMs: positionMs,
@@ -132,41 +114,21 @@ import VLCKit
         return engine
     }
 
-    /// Compares the counters with the previous reading.
-    private func sampleProgress() {
-        let now = ProcessInfo.processInfo.systemUptime
-        guard now - sampledAt >= Self.minSampleInterval else { return }
-        let current = stats
-        let moved = current.positionMs > sample.positionMs
-            || current.displayedPictures > sample.displayedPictures
-            || current.decodedAudioBlocks > sample.decodedAudioBlocks
-        advancing = moved && engine?.isPlaying == true
-        if advancing { hasAdvanced = true }
-        sample = current
-        sampledAt = now
-    }
-
     fileprivate func engineStateChanged() {
         guard acceptingEvents, let engine else { return }
-        if lastEvent == .ended || lastEvent == .error { return }  // final for this play call
-        let state = engine.state
-        // A late Ended or Error of the stream being left would otherwise fail this one's start.
-        guard hasOpened || state == .opening else { return }
-        switch state {
-        case .opening:
-            lastEvent = .opening
-            hasOpened = true
-        case .buffering: lastEvent = .buffering
-        case .playing, .esAdded, .paused: lastEvent = .running
-        case .ended: lastEvent = .ended
-        case .error: lastEvent = .error
+        switch engine.state {
+        case .opening: progress.take(.opening)
+        case .buffering: progress.take(.buffering)
+        case .playing, .esAdded, .paused: progress.take(.running)
+        case .ended: progress.take(.ended)
+        case .error: progress.take(.error)
         case .stopped: break  // never this play call's: `stop` turns events off before stopping
         @unknown default: break
         }
     }
 
     fileprivate func engineTimeChanged() {
-        guard acceptingEvents, hasOpened, let engine else { return }  // not the stream being left's time
+        guard acceptingEvents, progress.hasOpened, let engine else { return }  // not the stream being left's time
         positionMs = Int64(engine.time.intValue)
     }
 }

@@ -44,6 +44,8 @@ extension PlaybackSupervisorTests {
 
         func stop() { stopCount += 1 }
 
+        func sampleState() -> PlayerState { state }
+
         /// The shortest real time between two play calls for the same URL.
         var minSpacingPerURL: TimeInterval {
             var minimum = TimeInterval.infinity

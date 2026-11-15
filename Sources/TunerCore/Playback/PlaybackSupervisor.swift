@@ -152,7 +152,7 @@ import Foundation
     // MARK: Watching a live attempt
 
     private func observe(at time: Date) {
-        let state = player.state
+        let state = player.sampleState()
         let stats = player.stats
         let progressed = stats.positionMs > baseline.positionMs
             || stats.displayedPictures > baseline.displayedPictures
@@ -330,7 +330,7 @@ import Foundation
     /// Forgets the progress baseline and every timer; the next tick starts fresh.
     private func forgetProgress(at time: Date) {
         baseline = player.stats
-        previousState = player.state
+        previousState = player.sampleState()
         attemptStartedAt = time
         lastProgressAt = time
         stableSince = hasProgressed ? time : nil
