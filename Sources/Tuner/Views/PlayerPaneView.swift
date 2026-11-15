@@ -14,6 +14,7 @@ struct PlayerPaneView: View {
     @State private var idle = IdleWatch()
     /// Where the pointer and the window were when a drag of the small picture began.
     @State private var pictureDrag: (pointer: NSPoint, window: NSPoint)?
+    @AppStorage(PictureSettings.snapsToCornersKey) private var pictureSnapsToCorners = true
 
     /// The drawer's width, and how far in the card sits while the drawer shows.
     private static let drawerWidth: CGFloat = 340
@@ -84,7 +85,7 @@ struct PlayerPaneView: View {
             // The small picture is moved by dragging it anywhere. The layer takes the mouse before
             // the window can, so the window is moved here: by as far as the pointer has gone on the
             // screen since the drag began, kept wholly on the screen the pointer is on; let go, it
-            // settles into that screen's nearest corner.
+            // settles into that screen's nearest corner, unless that is turned off in the View menu.
             .simultaneousGesture(
                 DragGesture(minimumDistance: 3)
                     .onChanged { _ in
@@ -102,7 +103,7 @@ struct PlayerPaneView: View {
                     }
                     .onEnded { _ in
                         pictureDrag = nil
-                        guard model.pictureInPicture, let window = model.videoView.window,
+                        guard pictureSnapsToCorners, model.pictureInPicture, let window = model.videoView.window,
                               let screen = Self.screen(under: NSEvent.mouseLocation, or: window)
                         else { return }
                         let corner = PicturePlacement.snapped(

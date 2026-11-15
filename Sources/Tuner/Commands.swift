@@ -32,6 +32,7 @@ struct SourceCommands: Commands {
 /// Menu items, so the shortcuts work whichever pane has the keyboard, full screen included.
 struct ChannelCommands: Commands {
     let model: AppModel?
+    @AppStorage(PictureSettings.snapsToCornersKey) private var pictureSnapsToCorners = true
 
     var body: some Commands {
         CommandGroup(after: .textEditing) {
@@ -50,6 +51,7 @@ struct ChannelCommands: Commands {
             }
             .keyboardShortcut("p", modifiers: [.command, .shift])
             .disabled(model == nil || (model?.playingChannel == nil && model?.pictureInPicture != true))
+            Toggle("Snap Picture to Corners", isOn: $pictureSnapsToCorners)
             Button(model?.showsChannelList == false ? "Show Channel List" : "Hide Channel List") {
                 model?.send(.toggleChannelList)
             }
@@ -81,4 +83,10 @@ struct ChannelCommands: Commands {
             .disabled(model == nil)
         }
     }
+}
+
+/// The small picture's settings, kept in the app's defaults.
+enum PictureSettings {
+    /// On unless turned off: let go after a drag, the picture settles into the nearest corner.
+    static let snapsToCornersKey = "pictureSnapsToCorners"
 }
