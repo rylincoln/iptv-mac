@@ -1,0 +1,9 @@
+# Private provider data: playlists and guide dumps contain account URLs
+sample_files/
+*.m3u
+*.m3u8
+.superpowers/
+.DS_Store
+.build/
+DerivedData/
+xcuserdata/
