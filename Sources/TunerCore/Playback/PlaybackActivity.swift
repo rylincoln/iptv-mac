@@ -17,12 +17,3 @@ public enum PlaybackActivity: Equatable, Sendable {
         }
     }
 }
-
-public enum StreamHost {
-    /// The host name of a stream address, lower case, and nothing else of it: addresses carry account
-    /// credentials. Nil when it has no host.
-    public static func name(of streamURL: String) -> String? {
-        guard let host = URL(string: streamURL)?.host(percentEncoded: false), !host.isEmpty else { return nil }
-        return host.lowercased()
-    }
-}

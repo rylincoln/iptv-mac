@@ -126,6 +126,19 @@ import Testing
     #expect(r.skippedCount == 1)
 }
 
+/// A password with an unencoded "/" cuts the address short before the host: the user name must
+/// not become the channel's name.
+@Test func slashInAPasswordNeverNamesTheChannel() {
+    let text = """
+    #EXTM3U
+    #EXTINF:-1,
+    http://user:12/34@example.invalid/live/a
+    """
+    let r = M3UParser.parse(text)
+    #expect(r.channels.count == 1)
+    #expect(r.channels[0].name == "Unnamed channel")
+}
+
 @Test func ipv6HostFallbackNameHasNoPort() {
     let r = M3UParser.parse("""
     #EXTM3U
