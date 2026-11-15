@@ -31,6 +31,10 @@ public final class Store: Sendable {
         try Store(queue: DatabaseQueue())
     }
 
+    /// True for `inMemory()`. Its one connection serves reads and writes in turn, so a read can wait
+    /// for the whole of an import's write; an on-disk store's reads never wait for its writer.
+    public var isInMemory: Bool { db is DatabaseQueue }
+
     static var migrator: DatabaseMigrator {
         var migrator = DatabaseMigrator()
         migrator.registerMigration("v1") { db in

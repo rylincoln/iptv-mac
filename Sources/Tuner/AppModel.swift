@@ -605,12 +605,14 @@ typealias ChannelSection = TunerCore.Section
 
 /// Buffer memory whose writes run in the background: a stall during a guide import must not make the
 /// main thread wait for the import's write transaction. Reads stay synchronous because the supervisor
-/// needs the value at once; in WAL mode a read never waits for a writer.
+/// needs the value at once; in WAL mode a read never waits for a writer. The in-memory fallback library
+/// has no WAL, and a read there would wait on the main thread for a whole import, so it reads nothing:
+/// every channel starts at the first buffer step.
 private struct BackgroundBufferMemory: BufferMemory {
     let store: Store
 
     func bufferMs(forStreamURL streamURL: String) -> Int? {
-        store.bufferMs(forStreamURL: streamURL)
+        store.isInMemory ? nil : store.bufferMs(forStreamURL: streamURL)
     }
 
     func setBufferMs(_ ms: Int, forStreamURL streamURL: String) {

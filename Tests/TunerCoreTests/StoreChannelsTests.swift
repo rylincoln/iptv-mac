@@ -238,6 +238,14 @@ private let now = Date(timeIntervalSince1970: 1_800_000_000)
         #expect(store.bufferMs(forStreamURL: url("a")) == 3000)
     }
 
+    @Test func storeSaysWhetherItIsInMemory() throws {
+        #expect(try Store.inMemory().isInMemory)
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tuner-store-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect(try !Store(path: dir.appendingPathComponent("tuner.sqlite").path).isInMemory)
+    }
+
     @Test func reopeningFileKeepsData() throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("tuner-store-\(UUID().uuidString)", isDirectory: true)
