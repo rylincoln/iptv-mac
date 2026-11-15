@@ -67,6 +67,9 @@ typealias ChannelSection = TunerCore.Section
     /// Bumped by `requestSearchField`; the window shows the search field and gives it the keyboard on
     /// each change.
     private(set) var searchFieldRequests = 0
+    /// Bumped by `requestVideoFullScreenToggle`; the window puts the video in or out of full screen on
+    /// each change.
+    private(set) var videoFullScreenRequests = 0
     private(set) var status: PlaybackSupervisor.Status = .idle
     /// "Importing…", "4,144 channels", or a short fixed error. Never a location.
     private(set) var importMessage: String?
@@ -504,6 +507,11 @@ typealias ChannelSection = TunerCore.Section
             guard !Task.isCancelled, let loaded, playingChannel?.guideRef == ref, loaded != upNext else { return }
             upNext = loaded
         }
+    }
+
+    /// ⌘⏎: the video alone, full screen, or back to the panes.
+    func requestVideoFullScreenToggle() {
+        videoFullScreenRequests &+= 1
     }
 
     // MARK: Search

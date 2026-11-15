@@ -39,6 +39,12 @@ struct ChannelCommands: Commands {
                 .keyboardShortcut("f", modifiers: .command)
                 .disabled(model == nil)
         }
+        CommandGroup(before: .toolbar) {
+            Button("Video Full Screen") { model?.requestVideoFullScreenToggle() }
+                .keyboardShortcut(.return, modifiers: .command)
+                .disabled(model == nil)
+            Divider()
+        }
         CommandMenu("Channel") {
             Group {
                 Button("Toggle Favourite") { model?.toggleFavouriteOnSelection() }

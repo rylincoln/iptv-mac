@@ -66,6 +66,7 @@ struct MainWindow: View {
             }
         }
         .onChange(of: model.searchFieldRequests) { showSearchField() }
+        .onChange(of: model.videoFullScreenRequests) { videoFullScreen.toggle() }
         .onChange(of: columns) { _, now in
             if now != .all { columnsBeforeSearch = nil }  // the owner's own choice stands
         }
