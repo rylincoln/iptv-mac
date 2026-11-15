@@ -11,8 +11,11 @@ import TunerCore
 /// At most six downloads run at once; a download is cancelled, in the queue or on the wire, once every
 /// row that asked for it has scrolled away.
 /// A URL whose response is not a usable logo (not 2xx, too large, or not an image) is a miss and is
-/// not tried again this session; one whose transfer failed (offline, timed out) is tried again when
-/// its row next shows. Logo URLs come from the playlist and are never logged.
+/// not tried again this session. A transfer that finds the host cannot be found, connected to, or
+/// spoken to securely makes every logo on that host a miss for ten minutes (`UnreachableHost`), so a
+/// dead host does not take a download slot each time a row shows; a download queued for it meanwhile
+/// is dropped when its turn comes. Any other failed transfer (offline, timed out, cut off) is tried
+/// again when its row next shows. Logo URLs come from the playlist and are never logged.
 ///
 /// A download is bounded in memory and time, because the URLs are untrusted: the body is read as a
 /// stream and the request is cancelled, closing the connection, as soon as the declared length or the
@@ -27,12 +30,15 @@ final class LogoCache: @unchecked Sendable {  // NSCache, Mutex and the actor ar
 
     private static let memoryLimit = 400        // thumbnails of about 16 KB each
     private static let missLimit = 4_096
+    private static let unreachableHostLimit = 256
     private static let diskBytes = 200 * 1024 * 1024
     private static let maxDownloadBytes = 4 * 1024 * 1024
     private static let maxSourcePixels = 4096 * 4096
 
     private let images = NSCache<NSString, NSImage>()
     private let misses = Mutex(MissSet(limit: LogoCache.missLimit))
+    /// Hosts lately found unreachable, by lower-case name, each for `UnreachableHost.memory`.
+    private let unreachableHosts = Mutex(ExpiringSet<String>(limit: LogoCache.unreachableHostLimit))
     /// The loads under way, one per URL; each URL is forgotten as its load ends.
     private let loads = SharedWork<String, NSImage?>()
     private let gate = DownloadGate(limit: 6)
@@ -64,7 +70,8 @@ final class LogoCache: @unchecked Sendable {  // NSCache, Mutex and the actor ar
     }
 
     /// The logo as a thumbnail `pointSize` across, or nil for no logo. Nil also when the calling task
-    /// is cancelled or the transfer fails, neither of which is remembered as a miss.
+    /// is cancelled or the transfer fails, neither of which is remembered as a miss, and while the
+    /// logo's host is taken as unreachable.
     @concurrent func image(for urlString: String) async -> NSImage? {
         if let hit = images.object(forKey: urlString as NSString) { return hit }
         if misses.withLock({ $0.contains(urlString) }) { return nil }
@@ -74,6 +81,7 @@ final class LogoCache: @unchecked Sendable {  // NSCache, Mutex and the actor ar
             recordMiss(urlString)
             return nil
         }
+        if isUnreachable(url) { return nil }
         do {
             return try await loads.value(for: urlString) { [self] in try await load(url, urlString: urlString) }
         } catch {
@@ -84,7 +92,16 @@ final class LogoCache: @unchecked Sendable {  // NSCache, Mutex and the actor ar
     /// Downloads, decodes and keeps one logo, once for every row asking for it meanwhile. Throws when
     /// the transfer fails, or when it is cancelled because every row asking has gone.
     private func load(_ url: URL, urlString: String) async throws -> NSImage? {
-        guard let data = try await download(url), let image = thumbnail(from: data) else {
+        let data: Data?
+        do {
+            data = try await download(url)
+        } catch {
+            if let memory = UnreachableHost.memory(for: error), let host = Self.host(of: url) {
+                unreachableHosts.withLock { $0.insert(host, at: .now, for: memory) }
+            }
+            throw error
+        }
+        guard let data, let image = thumbnail(from: data) else {
             recordMiss(urlString)  // the server answered, with something that is not a usable logo
             return nil
         }
@@ -94,9 +111,14 @@ final class LogoCache: @unchecked Sendable {  // NSCache, Mutex and the actor ar
 
     /// The body of a successful response, or nil for a response that is not 2xx or a body over the
     /// size cap. Throws when cancelled or when the transfer fails (no connection, a timeout), neither
-    /// of which says anything about the logo. The download slot is released on every path.
+    /// of which says anything about the logo, and when the host was found unreachable while this
+    /// waited for a slot. The download slot is released on every path.
     private func download(_ url: URL) async throws -> Data? {
         try await gate.acquire()
+        if isUnreachable(url) {
+            await gate.release()
+            throw SkippedForUnreachableHost()
+        }
         let body: Data?
         do {
             body = try await fetch(url)
@@ -151,7 +173,19 @@ final class LogoCache: @unchecked Sendable {  // NSCache, Mutex and the actor ar
     private func recordMiss(_ urlString: String) {
         misses.withLock { $0.insert(urlString) }
     }
+
+    private func isUnreachable(_ url: URL) -> Bool {
+        guard let host = Self.host(of: url) else { return false }
+        return unreachableHosts.withLock { $0.contains(host, at: .now) }
+    }
+
+    private static func host(of url: URL) -> String? {
+        url.host()?.lowercased()
+    }
 }
+
+/// A download not tried because its host was found unreachable while it waited. Not itself remembered.
+private struct SkippedForUnreachableHost: Error {}
 
 /// URLs that failed this session. Bounded: when full it starts again empty, so a forgotten failure
 /// is at worst tried once more.
