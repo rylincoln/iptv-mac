@@ -1,12 +1,15 @@
 import AppKit
 import ImageIO
 import Synchronization
+import TunerCore
 
 /// Channel logos for the list, small and already decoded.
 ///
 /// Decoded thumbnails, at the size rows draw them, live in a bounded memory cache. The downloaded
-/// bytes live in a 200 MB disk `URLCache`, so a relaunch does not fetch them again. At most six
-/// downloads run at once; a request whose row scrolls away is cancelled, in the queue or on the wire.
+/// bytes live in a 200 MB disk `URLCache`, so a relaunch does not fetch them again. Rows asking for a
+/// URL already on its way (a channel's HD, FHD and SD variants share a logo) share its one download.
+/// At most six downloads run at once; a download is cancelled, in the queue or on the wire, once every
+/// row that asked for it has scrolled away.
 /// A URL whose response is not a usable logo (not 2xx, too large, or not an image) is a miss and is
 /// not tried again this session; one whose transfer failed (offline, timed out) is tried again when
 /// its row next shows. Logo URLs come from the playlist and are never logged.
@@ -30,6 +33,8 @@ final class LogoCache: @unchecked Sendable {  // NSCache, Mutex and the actor ar
 
     private let images = NSCache<NSString, NSImage>()
     private let misses = Mutex(MissSet(limit: LogoCache.missLimit))
+    /// The loads under way, one per URL; each URL is forgotten as its load ends.
+    private let loads = SharedWork<String, NSImage?>()
     private let gate = DownloadGate(limit: 6)
     private let session: URLSession
     private let scale: CGFloat
@@ -61,8 +66,7 @@ final class LogoCache: @unchecked Sendable {  // NSCache, Mutex and the actor ar
     /// The logo as a thumbnail `pointSize` across, or nil for no logo. Nil also when the calling task
     /// is cancelled or the transfer fails, neither of which is remembered as a miss.
     @concurrent func image(for urlString: String) async -> NSImage? {
-        let key = urlString as NSString
-        if let hit = images.object(forKey: key) { return hit }
+        if let hit = images.object(forKey: urlString as NSString) { return hit }
         if misses.withLock({ $0.contains(urlString) }) { return nil }
         guard let url = URL(string: urlString), let scheme = url.scheme?.lowercased(),
               scheme == "http" || scheme == "https"
@@ -70,17 +74,21 @@ final class LogoCache: @unchecked Sendable {  // NSCache, Mutex and the actor ar
             recordMiss(urlString)
             return nil
         }
-        let data: Data?
         do {
-            data = try await download(url)
+            return try await loads.value(for: urlString) { [self] in try await load(url, urlString: urlString) }
         } catch {
             return nil  // cancelled (the row went away), or the transfer failed: try again next time
         }
-        guard let data, let image = thumbnail(from: data) else {
+    }
+
+    /// Downloads, decodes and keeps one logo, once for every row asking for it meanwhile. Throws when
+    /// the transfer fails, or when it is cancelled because every row asking has gone.
+    private func load(_ url: URL, urlString: String) async throws -> NSImage? {
+        guard let data = try await download(url), let image = thumbnail(from: data) else {
             recordMiss(urlString)  // the server answered, with something that is not a usable logo
             return nil
         }
-        images.setObject(image, forKey: key)
+        images.setObject(image, forKey: urlString as NSString)
         return image
     }
 
