@@ -102,6 +102,10 @@ typealias ChannelSection = TunerCore.Section
     @ObservationIgnored private var upNextLoad: Task<Void, Never>?
     /// A channel asked for by its place in Recents (⌘1…⌘9, ⌘[), while Recents is read.
     @ObservationIgnored private var recentsPlay: Task<Void, Never>?
+    /// Favourites are shown changed before they are written, and a write can wait behind an import. A
+    /// store read made meanwhile can find the store without the change and would show it undone: the
+    /// minute's reads wait for the writes, and other reads are made again once the writes have ended.
+    @ObservationIgnored private var favouriteWrites = OptimisticWrites<StarRead>()
     /// Fires once, on the next minute boundary; exists only while the window is visible.
     @ObservationIgnored private var minuteTimer: Timer?
     @ObservationIgnored private var isWindowVisible = false
@@ -118,6 +122,9 @@ typealias ChannelSection = TunerCore.Section
     @ObservationIgnored private var leftoverSweep: Task<Void, Never>?
 
     private static let searchPause: Duration = .milliseconds(80)
+
+    /// The reads that show stars: the channel list and the search results.
+    private enum StarRead: Hashable, Sendable { case rows, search }
 
     init(store: Store, message: String? = nil) {
         self.store = store
@@ -296,20 +303,29 @@ typealias ChannelSection = TunerCore.Section
     // MARK: Favourites
 
     /// Shows the change at once, stars and the Favourites section alike, without waiting for the write,
-    /// which can sit behind an import; the Favourites section reloads once it is written. A write that
-    /// fails puts the change back, so the stars show what the store holds.
+    /// which can sit behind an import; until every such write has ended, reads of the store wait or are
+    /// made again (`favouriteWrites`). A write that fails puts the change back, so the stars show what
+    /// the store holds.
     func toggleFavourite(_ channel: ChannelRow) {
         let on = !channel.isFavourite
         showFavourite(on, streamURL: channel.streamURL)
+        favouriteWrites.begin()
         let store = self.store
         Task {
             let written = await Task.detached(priority: .userInitiated) {
                 (try? store.setFavourite(on, streamURL: channel.streamURL, name: channel.name)) != nil
             }.value
             if !written { showFavourite(!on, streamURL: channel.streamURL) }
-            // Also brings back a row whose removal could not be written.
-            if currentSection == .favourites { reloadRows() }
+            if let reads = favouriteWrites.end() { readAfterFavouriteWrites(reads) }
         }
+    }
+
+    /// Every favourite write has ended. The reads that may have missed one are made again, and the
+    /// Favourites section is read again while it is the section chosen: a channel starred elsewhere
+    /// shows there only once read, and a row whose removal could not be written comes back.
+    private func readAfterFavouriteWrites(_ reads: Set<StarRead>) {
+        if reads.contains(.rows) || currentSection == .favourites { reloadRows() }
+        if reads.contains(.search) { refreshSearchResults() }
     }
 
     /// Stars or unstars every row shown with the stream URL: the list, the playing channel and the
@@ -391,11 +407,12 @@ typealias ChannelSection = TunerCore.Section
     /// What depends on the time, read again on the minute while the window is visible: what is on now,
     /// the Sports section's channels when it is the section chosen (it lists the channels with a sport
     /// on now), and the search results while they show. A read that finds what is shown changes
-    /// nothing on screen.
+    /// nothing on screen. The reads that show stars wait while a favourite is still being written,
+    /// and are made once it is (`favouriteWrites`).
     private func reloadForNewMinute() {
         reloadNowPlaying()
-        if currentSection == .sports { reloadRows() }
-        refreshSearchResults()
+        if currentSection == .sports, favouriteWrites.mayRead(.rows) { reloadRows() }
+        if searchResults != nil, favouriteWrites.mayRead(.search) { refreshSearchResults() }
     }
 
     /// A failed read keeps what is shown.
@@ -495,12 +512,14 @@ typealias ChannelSection = TunerCore.Section
             do { try await Task.sleep(for: Self.searchPause) } catch { return }
             _ = await searchQuery?.value
             guard !Task.isCancelled else { return }
+            let ticket = favouriteWrites.ticket
             let query = Task.detached(priority: .userInitiated) { try? store.search(text, at: Date()) }
             searchQuery = query
             let found = await query.value
             if searchQuery == query { searchQuery = nil }  // finished: nothing to wait for, nothing kept
             guard !Task.isCancelled, text == currentSearchText, let found else { return }  // a failed read keeps what is shown
             apply(found, for: text)
+            if favouriteWrites.check(.search, since: ticket) == .readAgainNow { refreshSearchResults() }
         }
     }
 
@@ -517,17 +536,19 @@ typealias ChannelSection = TunerCore.Section
         searchLoad = Task {
             _ = await searchQuery?.value
             guard !Task.isCancelled else { return }
+            let ticket = favouriteWrites.ticket
             let query = Task.detached(priority: .utility) { try? store.search(text, at: Date()) }
             searchQuery = query
             let found = await query.value
             if searchQuery == query { searchQuery = nil }
             // A failed read keeps what is shown.
-            guard !Task.isCancelled, text == currentSearchText, text == resultsText, let found,
-                  found != searchResults
-            else { return }
-            searchResults = found
-            let selection = found.selection(following: selectedResultID)
-            if selection != selectedResultID { selectedResultID = selection }
+            guard !Task.isCancelled, text == currentSearchText, text == resultsText, let found else { return }
+            if found != searchResults {
+                searchResults = found
+                let selection = found.selection(following: selectedResultID)
+                if selection != selectedResultID { selectedResultID = selection }
+            }
+            if favouriteWrites.check(.search, since: ticket) == .readAgainNow { refreshSearchResults() }
         }
     }
 
@@ -576,6 +597,7 @@ typealias ChannelSection = TunerCore.Section
         rowsLoad?.cancel()
         let section = currentSection
         let store = self.store
+        let ticket = favouriteWrites.ticket
         rowsLoad = Task {
             let loaded = await Task.detached(priority: .userInitiated) {
                 try? store.channels(in: section, at: Date())
@@ -591,6 +613,7 @@ typealias ChannelSection = TunerCore.Section
             }
             apply(rows: loaded, of: section)
             if selectingFirst, selectedChannelID == nil { selectedChannelID = loaded.first?.id }
+            if favouriteWrites.check(.rows, since: ticket) == .readAgainNow { reloadRows() }
         }
     }
 
