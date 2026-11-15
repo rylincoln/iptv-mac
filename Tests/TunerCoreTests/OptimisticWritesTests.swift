@@ -8,7 +8,12 @@ private extension OptimisticWrites<Read> {
     mutating func ending() -> Set<Read>? { end() }
     mutating func asking(_ read: Read) -> Bool { mayRead(read) }
     mutating func checking(_ read: Read, since ticket: Ticket) -> Freshness { check(read, since: ticket) }
+    mutating func using(_ read: Read, since ticket: Ticket, replacingShown: Bool) -> Use {
+        use(read, since: ticket, replacingShown: replacingShown)
+    }
 }
+
+private typealias Use = OptimisticWrites<Read>.Use
 
 @Suite struct OptimisticWritesTests {
     @Test func withNoWriteEveryReadIsCurrent() {
@@ -99,6 +104,53 @@ private extension OptimisticWrites<Read> {
         #expect(first == nil)
         let last = writes.ending()
         #expect(last == [.rows])
+    }
+
+    @Test func aReadNoWriteRanDuringIsShown() {
+        var writes = OptimisticWrites<Read>()
+        let ticket = writes.ticket
+        let again = writes.using(.rows, since: ticket, replacingShown: true)
+        #expect(again == Use(show: true, readAgain: false))
+        let new = writes.using(.rows, since: ticket, replacingShown: false)
+        #expect(new == Use(show: true, readAgain: false))
+    }
+
+    /// A read of what is shown, out when the change was made, would put the change back: it is not
+    /// shown, and is made again once the write has ended.
+    @Test func aReadOfWhatIsShownIsNotShownWhileAWriteIsUnfinished() {
+        var writes = OptimisticWrites<Read>()
+        let startedBefore = writes.ticket
+        writes.begin()
+        let use = writes.using(.rows, since: startedBefore, replacingShown: true)
+        #expect(use == Use(show: false, readAgain: false))
+        let ended = writes.ending()
+        #expect(ended == [.rows])
+    }
+
+    /// Something new, a section just chosen or text just typed, has nothing else to show it: it is
+    /// shown, and made again once the write has ended.
+    @Test func aReadOfSomethingNewIsShownWhileAWriteIsUnfinished() {
+        var writes = OptimisticWrites<Read>()
+        let startedBefore = writes.ticket
+        writes.begin()
+        let use = writes.using(.search, since: startedBefore, replacingShown: false)
+        #expect(use == Use(show: true, readAgain: false))
+        let ended = writes.ending()
+        #expect(ended == [.search])
+    }
+
+    @Test func aReadAWriteEndedDuringIsMadeAgainNowAndShownOnlyIfNew() {
+        var writes = OptimisticWrites<Read>()
+        let ticket = writes.ticket
+        writes.begin()
+        _ = writes.ending()
+        let again = writes.using(.rows, since: ticket, replacingShown: true)
+        #expect(again == Use(show: false, readAgain: true))
+        let new = writes.using(.rows, since: ticket, replacingShown: false)
+        #expect(new == Use(show: true, readAgain: true))
+        writes.begin()
+        let ended = writes.ending()
+        #expect(ended == [])  // nothing was held: these are read again at once instead
     }
 
     @Test func endingMoreWritesThanBegunChangesNothing() {

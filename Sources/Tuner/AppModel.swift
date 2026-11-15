@@ -107,7 +107,9 @@ typealias ChannelSection = TunerCore.Section
     @ObservationIgnored private var recentsPlay: Task<Void, Never>?
     /// Favourites are shown changed before they are written, and a write can wait behind an import. A
     /// store read made meanwhile can find the store without the change and would show it undone: the
-    /// minute's reads wait for the writes, and other reads are made again once the writes have ended.
+    /// minute's reads wait for the writes; any other read that overlapped one is made again once the
+    /// writes have ended, and meanwhile is shown only if it is of something new (a section just
+    /// chosen, text just typed), never in place of a list or results already shown.
     @ObservationIgnored private var favouriteWrites = OptimisticWrites<StarRead>()
     /// Fires once, on the next minute boundary; exists only while the window is visible.
     @ObservationIgnored private var minuteTimer: Timer?
@@ -578,12 +580,14 @@ typealias ChannelSection = TunerCore.Section
             if searchQuery == query { searchQuery = nil }
             // A failed read keeps what is shown.
             guard !Task.isCancelled, text == currentSearchText, text == resultsText, let found else { return }
-            if let old = searchResults, found != old {
+            // Not shown if it may have missed a favourite written meanwhile; read again after the write.
+            let use = favouriteWrites.use(.search, since: ticket, replacingShown: true)
+            if use.show, let old = searchResults, found != old {
                 searchResults = found
                 let selection = found.selection(following: selectedResultID, in: old)
                 if selection != selectedResultID { selectedResultID = selection }
             }
-            if favouriteWrites.check(.search, since: ticket) == .readAgainNow { refreshSearchResults() }
+            if use.readAgain { refreshSearchResults() }
         }
     }
 
@@ -654,10 +658,15 @@ typealias ChannelSection = TunerCore.Section
                 self.section = .all  // reloads
                 return
             }
-            apply(rows: loaded, of: section)
-            rowsReadAt = now
-            if selectingFirst, selectedChannelID == nil { selectedChannelID = loaded.first?.id }
-            if favouriteWrites.check(.rows, since: ticket) == .readAgainNow { reloadRows() }
+            // The section shown, read again, is not replaced by a read that may have missed a favourite
+            // written meanwhile: that would put the star back. It is read again after the write.
+            let use = favouriteWrites.use(.rows, since: ticket, replacingShown: rowsSection == section)
+            if use.show {
+                apply(rows: loaded, of: section)
+                rowsReadAt = now
+                if selectingFirst, selectedChannelID == nil { selectedChannelID = loaded.first?.id }
+            }
+            if use.readAgain { reloadRows(selectingFirst: selectingFirst, leavingEmptyRecents: leavingEmptyRecents) }
         }
     }
 

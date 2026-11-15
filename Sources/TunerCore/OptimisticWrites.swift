@@ -21,6 +21,19 @@ public struct OptimisticWrites<Read: Hashable & Sendable>: Sendable {
         fileprivate let ended: UInt64
     }
 
+    /// What to do with a read that has come back (`use`).
+    public struct Use: Sendable, Equatable {
+        /// Show what was read.
+        public var show: Bool
+        /// Make the read again now: a write ran while it was read, and every write has ended since.
+        public var readAgain: Bool
+
+        public init(show: Bool, readAgain: Bool) {
+            self.show = show
+            self.readAgain = readAgain
+        }
+    }
+
     /// Writes begun and not yet ended.
     public private(set) var unfinished = 0
     /// Writes ended, ever. It moves whenever a write ends, so a ticket shows whether one did.
@@ -68,5 +81,19 @@ public struct OptimisticWrites<Read: Hashable & Sendable>: Sendable {
             return .heldUntilWritten
         }
         return ticket.ended == ended ? .current : .readAgainNow
+    }
+
+    /// For a read that has come back, begun when `ticket` was taken: whether to show it, and whether to
+    /// make it again now. A read that overlapped a write may have missed it. One that would replace what
+    /// is shown (`replacingShown`: the same list or results read again) is then not shown, as it would
+    /// put the change back on screen; one of something new (a section just chosen, text just typed) has
+    /// nothing else to show it, so it is shown. Either way it is made again once the writes have ended,
+    /// as with `check`.
+    public mutating func use(_ read: Read, since ticket: Ticket, replacingShown: Bool) -> Use {
+        switch check(read, since: ticket) {
+        case .current: Use(show: true, readAgain: false)
+        case .heldUntilWritten: Use(show: !replacingShown, readAgain: false)
+        case .readAgainNow: Use(show: !replacingShown, readAgain: true)
+        }
     }
 }
