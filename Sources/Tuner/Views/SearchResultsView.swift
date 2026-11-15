@@ -55,9 +55,12 @@ struct SearchResultsView: View {
             resultList(nowPlaying: nowPlaying, now: now, today: today)
                 // New results show from the top, where their first row is selected. Asked to centre the
                 // top row, the list can only scroll to its very top, so the first section's header
-                // shows above the row rather than floating over it.
-                .onChange(of: results) {
-                    if let first = results.firstResultID { proxy.scrollTo(first, anchor: .center) }
+                // shows above the row rather than floating over it. Only a new search scrolls: a
+                // favourite toggled in the results leaves the list where it is. The scroll waits for
+                // the next turn of the main actor, once this update is done.
+                .onChange(of: model.resultsGeneration) {
+                    guard let first = results.firstResultID else { return }
+                    Task { proxy.scrollTo(first, anchor: .center) }
                 }
         }
     }

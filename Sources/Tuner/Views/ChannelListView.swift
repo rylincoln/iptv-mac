@@ -35,7 +35,9 @@ struct ChannelListView: View {
             .focused(focus, equals: .channelList)
             .onAppear {
                 if focus.wrappedValue == nil { focus.wrappedValue = .channelList }
-                // Back from a search the selection is as it was; bring it into view.
+                // Back from a search the selection is as it was; bring it into view. Here, not on the
+                // next turn: the list then lays out once, at the selection. Deferred, it laid out its
+                // top rows first and Escape took 15–20 ms longer, with no fewer AppKit warnings.
                 if let id = model.selectedChannelID { proxy.scrollTo(id, anchor: .center) }
             }
             // One modifier for the whole list: double-click plays, no per-row gestures.

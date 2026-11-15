@@ -53,6 +53,9 @@ typealias ChannelSection = TunerCore.Section
     private(set) var searchResults: SearchResults?
     /// The highlighted result. The first row is selected whenever new results arrive.
     var selectedResultID: SearchResultID?
+    /// Bumped each time a search's results are applied, even when they equal the ones showing; not by
+    /// changes to the results shown, such as a favourite. The results list scrolls to its top on it.
+    private(set) var resultsGeneration = 0
     /// A later programme picked from the results. The details pane shows it in place of the playing
     /// channel's programme until a channel is played or the search is cleared.
     private(set) var chosenProgramme: ProgrammeHit?
@@ -375,6 +378,7 @@ typealias ChannelSection = TunerCore.Section
         searchResults = found
         resultsText = text
         selectedResultID = found.firstResultID
+        resultsGeneration &+= 1
         if activateWhenSearched {
             activateWhenSearched = false
             if let id = selectedResultID { activateSearchResult(id) }
