@@ -23,31 +23,36 @@ enum Gunzip {
         var sawEnd = false
         var sawData = false
 
-        while let data = try input.read(upToCount: chunk), !data.isEmpty {
-            sawData = true
-            var bytes = [UInt8](data)
-            try bytes.withUnsafeMutableBufferPointer { inBuf in
-                stream.next_in = inBuf.baseAddress
-                stream.avail_in = UInt32(inBuf.count)
-                while stream.avail_in > 0 {
-                    var status: Int32 = Z_OK
-                    try outBuffer.withUnsafeMutableBufferPointer { outBuf in
-                        stream.next_out = outBuf.baseAddress
-                        stream.avail_out = UInt32(chunk)
-                        status = zlib.inflate(&stream, Z_NO_FLUSH)
-                        guard status == Z_OK || status == Z_STREAM_END || status == Z_BUF_ERROR else {
+        // Foundation hands back autoreleased Data; drain each chunk or the whole file piles up.
+        var more = true
+        while more {
+            try autoreleasepool {
+                guard let data = try input.read(upToCount: chunk), !data.isEmpty else { more = false; return }
+                sawData = true
+                var bytes = [UInt8](data)
+                try bytes.withUnsafeMutableBufferPointer { inBuf in
+                    stream.next_in = inBuf.baseAddress
+                    stream.avail_in = UInt32(inBuf.count)
+                    while stream.avail_in > 0 {
+                        var status: Int32 = Z_OK
+                        try outBuffer.withUnsafeMutableBufferPointer { outBuf in
+                            stream.next_out = outBuf.baseAddress
+                            stream.avail_out = UInt32(chunk)
+                            status = zlib.inflate(&stream, Z_NO_FLUSH)
+                            guard status == Z_OK || status == Z_STREAM_END || status == Z_BUF_ERROR else {
+                                throw Failure()
+                            }
+                            let produced = chunk - Int(stream.avail_out)
+                            if produced > 0 { try output.write(contentsOf: Data(bytes: outBuf.baseAddress!, count: produced)) }
+                        }
+                        if status == Z_STREAM_END {
+                            // Another gzip member may follow; trailing garbage is ignored.
+                            sawEnd = true
+                            if stream.avail_in > 0, inflateReset(&stream) != Z_OK { throw Failure() }
+                            if stream.avail_in > 0 { sawEnd = false }
+                        } else if status == Z_BUF_ERROR && stream.avail_in > 0 && stream.avail_out > 0 {
                             throw Failure()
                         }
-                        let produced = chunk - Int(stream.avail_out)
-                        if produced > 0 { try output.write(contentsOf: Data(bytes: outBuf.baseAddress!, count: produced)) }
-                    }
-                    if status == Z_STREAM_END {
-                        // Another gzip member may follow; trailing garbage is ignored.
-                        sawEnd = true
-                        if stream.avail_in > 0, inflateReset(&stream) != Z_OK { throw Failure() }
-                        if stream.avail_in > 0 { sawEnd = false }
-                    } else if status == Z_BUF_ERROR && stream.avail_in > 0 && stream.avail_out > 0 {
-                        throw Failure()
                     }
                 }
             }
