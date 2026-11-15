@@ -196,8 +196,10 @@ typealias ChannelSection = TunerCore.Section
         refreshStatsIfSeen()
     }
 
-    /// "Try Again" on the unavailable state.
+    /// "Try Again" on the unavailable state. A Recents entry asked for earlier and still being read is
+    /// dropped, as by any later request.
     func retry() {
+        cancelRecentsPlay()
         supervisor.retry()
         refreshStatsIfSeen()
     }
