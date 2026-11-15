@@ -65,7 +65,10 @@ struct PlayerPaneView: View {
     private var clickLayer: some View {
         Color.clear
             .contentShape(Rectangle())
-            .onTapGesture(count: 2) { model.send(.toggleVideoFullScreen) }
+            .onTapGesture(count: 2) {
+                // The small picture goes back to the window; otherwise in and out of full screen.
+                model.send(model.pictureInPicture ? .togglePictureInPicture : .toggleVideoFullScreen)
+            }
             .simultaneousGesture(
                 TapGesture().onEnded {
                     model.send(.videoClicked)

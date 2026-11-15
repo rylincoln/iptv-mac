@@ -1,12 +1,16 @@
 /// What the main window shows around the video, and the rules for changing it: whether the channel
 /// list (or the search results over it) is laid over the video, whether the video has the whole
-/// screen, and where the keyboard goes after each change. A value with no view in it: the window
+/// screen or is a small picture floating over other apps, and where the keyboard goes after each
+/// change. A value with no view in it: the window
 /// sends it what happened and does what it answers.
 public struct WindowState: Equatable, Sendable {
     /// The channel list shows over the video. Put away, it leaves the video alone.
     public private(set) var showsChannelList = true
     /// The video alone, filling the screen.
     public private(set) var videoFullScreen = false
+    /// Picture in picture: the window is a small video floating over other apps. Only while
+    /// something plays, never with the channel list, and never full screen.
+    public private(set) var pictureInPicture = false
 
     public init() {}
 
@@ -27,6 +31,8 @@ public struct WindowState: Equatable, Sendable {
         case videoClicked
         /// ⌘⏎, F, or a double-click on the video.
         case toggleVideoFullScreen
+        /// ⌘⇧P, or a double-click on the small picture.
+        case togglePictureInPicture
         /// The window left full screen by a route of its own (the green button, Mission Control).
         case windowLeftFullScreen
         /// `searching`: the search has text, or its field has the keyboard.
@@ -79,12 +85,23 @@ public struct WindowState: Equatable, Sendable {
         case .toggleVideoFullScreen:
             videoFullScreen.toggle()
             if videoFullScreen, playing { showsChannelList = false }
+            pictureInPicture = false
+        case .togglePictureInPicture:
+            if pictureInPicture {
+                pictureInPicture = false
+            } else if playing {
+                pictureInPicture = true
+                videoFullScreen = false
+                showsChannelList = false
+            }
         case .windowLeftFullScreen:
             videoFullScreen = false
         case .escape(let searching):
             // One thing at a time, outermost last: the search, then the channel list, then full
             // screen. In full screen the search field cannot be reached, so the list goes first.
-            if showsChannelList, playing, !searching || videoFullScreen {
+            if pictureInPicture {
+                pictureInPicture = false
+            } else if showsChannelList, playing, !searching || videoFullScreen {
                 showsChannelList = false
             } else if videoFullScreen {
                 videoFullScreen = false
@@ -92,8 +109,10 @@ public struct WindowState: Equatable, Sendable {
                 outcome.leaveSearch = true
             }
         }
+        // The small picture has no room for the list: whatever shows the list brings the window back.
+        if showsChannelList { pictureInPicture = false }
         if outcome.showSearchField || outcome.leaveSearch { return outcome }  // they move the keyboard themselves
-        if videoFullScreen != before.videoFullScreen {
+        if videoFullScreen != before.videoFullScreen || pictureInPicture != before.pictureInPicture {
             outcome.focus = showsChannelList ? .channelList : .player
         } else if showsChannelList != before.showsChannelList {
             outcome.focus = showsChannelList ? .channelListUnlessSearchField : .player

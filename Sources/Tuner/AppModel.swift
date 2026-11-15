@@ -71,6 +71,7 @@ typealias ChannelSection = TunerCore.Section
     private(set) var window = WindowState()
     var showsChannelList: Bool { window.showsChannelList }
     var videoFullScreen: Bool { window.videoFullScreen }
+    var pictureInPicture: Bool { window.pictureInPicture }
     /// Bumped when `send` leaves the window something to do; it takes them with `takeWindowOutcomes`.
     private(set) var windowOutcomeCount = 0
     @ObservationIgnored private var windowOutcomes: [WindowState.Outcome] = []

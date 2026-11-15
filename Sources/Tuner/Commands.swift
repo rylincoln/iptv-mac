@@ -43,6 +43,13 @@ struct ChannelCommands: Commands {
             Button("Video Full Screen") { model?.send(.toggleVideoFullScreen) }
                 .keyboardShortcut(.return, modifiers: .command)
                 .disabled(model == nil)
+            // The window made small, floating over other apps. Not the system's own picture in picture,
+            // which only plays through AVKit.
+            Button(model?.pictureInPicture == true ? "Exit Picture in Picture" : "Picture in Picture") {
+                model?.send(.togglePictureInPicture)
+            }
+            .keyboardShortcut("p", modifiers: [.command, .shift])
+            .disabled(model == nil || (model?.playingChannel == nil && model?.pictureInPicture != true))
             Button(model?.showsChannelList == false ? "Show Channel List" : "Hide Channel List") {
                 model?.send(.toggleChannelList)
             }

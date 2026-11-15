@@ -135,4 +135,52 @@ private func state(after events: WindowState.Event...) -> WindowState {
         var state = state(after: .played)
         #expect(state.handle(.escape(searching: true), playing: true) == Outcome(leaveSearch: true))
     }
+
+    // MARK: Picture in picture
+
+    @Test func pictureInPictureLeavesThePlayingVideoAloneAndSmall() {
+        var state = WindowState()
+        #expect(state.handle(.togglePictureInPicture, playing: true) == Outcome(focus: .player))
+        #expect(state.pictureInPicture)
+        #expect(!state.showsChannelList)
+        #expect(state.handle(.togglePictureInPicture, playing: true) == Outcome(focus: .player))
+        #expect(!state.pictureInPicture)
+    }
+
+    @Test func pictureInPictureNeedsSomethingPlaying() {
+        var state = WindowState()
+        #expect(state.handle(.togglePictureInPicture, playing: false) == Outcome())
+        #expect(!state.pictureInPicture)
+    }
+
+    @Test func pictureInPictureAndFullScreenReplaceEachOther() {
+        var state = state(after: .toggleVideoFullScreen)
+        _ = state.handle(.togglePictureInPicture, playing: true)
+        #expect(state.pictureInPicture)
+        #expect(!state.videoFullScreen)
+        _ = state.handle(.toggleVideoFullScreen, playing: true)
+        #expect(!state.pictureInPicture)
+        #expect(state.videoFullScreen)
+    }
+
+    @Test func playingAnotherChannelKeepsThePictureSmall() {
+        var state = state(after: .togglePictureInPicture)
+        #expect(state.handle(.played, playing: true) == Outcome())
+        #expect(state.pictureInPicture)
+    }
+
+    @Test(arguments: [WindowState.Event.stopped, .toggleChannelList, .searchFieldRequested])
+    func whateverShowsTheListBringsTheWindowBack(_ event: WindowState.Event) {
+        var state = state(after: .togglePictureInPicture)
+        _ = state.handle(event, playing: true)
+        #expect(!state.pictureInPicture)
+        #expect(state.showsChannelList)
+    }
+
+    @Test func escapeLeavesPictureInPictureFirst() {
+        var state = state(after: .togglePictureInPicture)
+        #expect(state.handle(.escape(searching: true), playing: true) == Outcome(focus: .player))
+        #expect(!state.pictureInPicture)
+        #expect(!state.showsChannelList)
+    }
 }

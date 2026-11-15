@@ -35,18 +35,18 @@ struct MainWindow: View {
         .overlayPreferenceValue(PlayerPaneFrame.self) { anchor in
             GeometryReader { proxy in
                 let whole = CGRect(origin: .zero, size: proxy.size)
-                let frame = model.videoFullScreen ? whole : anchor.map { proxy[$0] } ?? whole
+                let frame = videoAlone ? whole : anchor.map { proxy[$0] } ?? whole
                 PlayerPaneView(
                     model: model, focus: $focus,
                     // What the toolbar covers of the pane, which the list and the corners keep clear of.
-                    topInset: model.videoFullScreen ? 0 : proxy.safeAreaInsets.top
+                    topInset: videoAlone ? 0 : proxy.safeAreaInsets.top
                 )
                 .frame(width: frame.width, height: frame.height)
                 .offset(x: frame.minX, y: frame.minY)
             }
             .ignoresSafeArea()
         }
-        .toolbar(model.videoFullScreen ? .hidden : .automatic, for: .windowToolbar)
+        .toolbar(videoAlone ? .hidden : .automatic, for: .windowToolbar)
         .toolbar(removing: model.showsChannelList ? nil : .title)
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)  // nothing drawn across the video
         .onExitCommand {
@@ -74,6 +74,7 @@ struct MainWindow: View {
         .background {
             WindowBridge(
                 videoFullScreen: model.videoFullScreen,
+                pictureInPicture: model.pictureInPicture,
                 visibilityChanged: { model.windowVisibilityChanged($0) },
                 leftFullScreen: { model.send(.windowLeftFullScreen) })
         }
@@ -89,8 +90,14 @@ struct MainWindow: View {
                 }
             }
         }
-        .frame(minWidth: 900, minHeight: 500)
+        // Picture in picture makes the window small; the video's own shape is kept by the window.
+        .frame(
+            minWidth: model.pictureInPicture ? WindowBridgeView.smallestPicture.width : 900,
+            minHeight: model.pictureInPicture ? WindowBridgeView.smallestPicture.height : 500)
     }
+
+    /// The video has the whole window: full screen, or picture in picture.
+    private var videoAlone: Bool { model.videoFullScreen || model.pictureInPicture }
 
     /// What `WindowState` leaves the window to do after an event.
     private func carryOut(_ outcome: WindowState.Outcome) {
