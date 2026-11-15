@@ -58,6 +58,10 @@ struct PlayerPaneView: View {
                     clickLayer
                 }
             }
+            .overlay { PlaybackStatusOverlay(model: model) }  // above the click layer: Try Again is a button
+            .overlay(alignment: .topLeading) {
+                if model.showsStats { StatsOverlay(readout: model.statsReadout) }
+            }
     }
 
     /// Takes clicks before the AppKit video view does: a click focuses the pane, so F works, and a
@@ -67,6 +71,53 @@ struct PlayerPaneView: View {
             .contentShape(Rectangle())
             .onTapGesture(count: 2) { isFullScreen.toggle() }
             .simultaneousGesture(TapGesture().onEnded { focus.wrappedValue = .player })
+    }
+}
+
+/// What the video is doing when it is not simply playing. It alone watches `status`, so a change
+/// rebuilds this and nothing else. It lets clicks through except on the Try Again button.
+private struct PlaybackStatusOverlay: View {
+    let model: AppModel
+
+    var body: some View {
+        switch model.status {
+        case .idle, .playing:
+            EmptyView()
+        case .starting:
+            ProgressView()
+                .controlSize(.small)
+                .padding(10)
+                .background(.black.opacity(0.5), in: Circle())
+                .environment(\.colorScheme, .dark)
+                .accessibilityLabel("Starting")
+                .allowsHitTesting(false)
+        case .reconnecting:
+            VStack {
+                HStack {
+                    Spacer()
+                    Label("Reconnecting…", systemImage: "arrow.triangle.2.circlepath")
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(.black.opacity(0.65), in: Capsule())
+                        .accessibilityLabel("Reconnecting")
+                }
+                Spacer()
+            }
+            .padding(12)
+            .allowsHitTesting(false)
+        case .unavailable:
+            VStack(spacing: 12) {
+                Text("Channel unavailable")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.white)
+                Button("Try Again") { model.retry() }
+                    .buttonStyle(.borderedProminent)
+            }
+            .padding(24)
+            .background(.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 12))
+        }
     }
 }
 

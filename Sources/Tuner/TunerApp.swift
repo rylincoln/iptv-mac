@@ -261,6 +261,11 @@ private struct ChannelCommands: Commands {
                     Button("Play Recent \(number)") { model?.playRecent(number - 1) }
                         .keyboardShortcut(KeyEquivalent(Character(String(number))), modifiers: .command)
                 }
+                Divider()
+                Button(model?.showsStats == true ? "Hide Playback Stats" : "Show Playback Stats") {
+                    model?.toggleStats()
+                }
+                .keyboardShortcut("i", modifiers: .command)
             }
             .disabled(model == nil)
         }

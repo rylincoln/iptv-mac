@@ -73,6 +73,11 @@ typealias ChannelSection = TunerCore.Section
 
     var videoView: NSView { player.videoView }
 
+    /// The stats overlay's numbers. Held apart from the model so that only the overlay watches them.
+    let statsReadout = StatsReadout()
+    /// ⌘I. Readings are taken only while it is on, on the supervisor's own tick.
+    private(set) var showsStats = false
+
     private var currentSection: ChannelSection = .recents
     private var isGroupsExpanded = false
     private var currentSearchText = ""
@@ -82,6 +87,8 @@ typealias ChannelSection = TunerCore.Section
     private let player: VLCPlayer
     private let supervisor: PlaybackSupervisor
     @ObservationIgnored private var ticker: Timer?
+    /// The one `ProcessInfo` activity held, if any; see `updateActivity`.
+    @ObservationIgnored private var heldActivity: (kind: PlaybackActivity, token: NSObjectProtocol)?
     @ObservationIgnored private var rowsLoad: Task<Void, Never>?
     @ObservationIgnored private var nowPlayingLoad: Task<Void, Never>?
     @ObservationIgnored private var upNextLoad: Task<Void, Never>?
@@ -134,6 +141,7 @@ typealias ChannelSection = TunerCore.Section
         playingChannel = channel
         reloadUpNext()
         supervisor.play(streamURL: channel.streamURL)
+        if showsStats { refreshStats() }
         let store = self.store
         Task.detached(priority: .utility) { try? store.recordWatched(channelID: channel.id, at: Date()) }
     }
@@ -143,6 +151,12 @@ typealias ChannelSection = TunerCore.Section
         playingChannel = nil
         upNextLoad?.cancel()
         upNext = []
+        if showsStats { refreshStats() }
+    }
+
+    /// "Try Again" on the unavailable state.
+    func retry() {
+        supervisor.retry()
     }
 
     /// Plays Recents entry `index` (0-based, newest first), as the store orders them.
@@ -173,17 +187,57 @@ typealias ChannelSection = TunerCore.Section
     /// notices a wake from sleep through them). While idle there is no timer at all.
     private func statusChanged(_ newStatus: PlaybackSupervisor.Status) {
         status = newStatus
+        updateActivity(for: newStatus)
+        if showsStats { refreshStats() }
         if newStatus == .idle {
             ticker?.invalidate()
             ticker = nil
         } else if ticker == nil {
             let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated { self?.supervisor.tick() }
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.supervisor.tick()
+                    if self.showsStats { self.refreshStats() }
+                }
             }
             timer.tolerance = 0.2
             RunLoop.main.add(timer, forMode: .common)  // keeps ticking while a menu or scroll is tracking
             ticker = timer
         }
+    }
+
+    /// Holds the activity the status needs, and no other: the new one is taken before the old one is
+    /// released, so there is no gap and never two. Nothing is held while idle.
+    private func updateActivity(for status: PlaybackSupervisor.Status) {
+        let needed = PlaybackActivity.needed(for: status)
+        guard heldActivity?.kind != needed else { return }
+        let old = heldActivity
+        heldActivity = needed.map { kind in
+            var options: ProcessInfo.ActivityOptions = .userInitiatedAllowingIdleSystemSleep
+            if kind == .keepDisplayAwake { options.insert(.idleDisplaySleepDisabled) }
+            return (kind, ProcessInfo.processInfo.beginActivity(options: options, reason: "Playing a channel"))
+        }
+        if let old { ProcessInfo.processInfo.endActivity(old.token) }
+    }
+
+    // MARK: Stats
+
+    func toggleStats() {
+        showsStats.toggle()
+        if showsStats { refreshStats() }
+    }
+
+    /// Only the host of the channel's address is ever read out of it.
+    private func refreshStats() {
+        let stats = player.stats
+        let reading = StatsReading(
+            host: playingChannel.flatMap { StreamHost.name(of: $0.streamURL) },
+            inputKbps: Int(stats.inputBitrateKbps.rounded()),
+            bufferMs: supervisor.currentBufferMs,
+            lostPictures: stats.lostPictures,
+            reconnects: supervisor.reconnectCount,
+            status: status)
+        if reading != statsReadout.reading { statsReadout.reading = reading }
     }
 
     // MARK: Favourites
