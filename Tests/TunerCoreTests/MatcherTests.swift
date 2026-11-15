@@ -56,6 +56,37 @@ private func query(_ id: Int64, name: String, tvgID: String? = nil, tvgName: Str
     #expect(Matcher.match([query(11, name: "ESPN")], against: guide2)[11] == nil)
 }
 
+@Test func tvgNameMatchesWhenTheTitleDoesNot() {
+    let guide = [cand(1, "a", ["ESPN"])]
+    let r = Matcher.match([query(10, name: "Sports Channel 7", tvgName: "ESPN")], against: guide)
+    #expect(r[10] == Match(guideRef: 1, kind: .name))
+}
+
+@Test func idMissFallsThroughToName() {
+    let guide = [cand(1, "a", ["ESPN"])]
+    let r = Matcher.match([query(10, name: "ESPN", tvgID: "not.in.guide")], against: guide)
+    #expect(r[10] == Match(guideRef: 1, kind: .name))
+}
+
+@Test func normalizedNameAmbiguity() {
+    // Both normalise to "espn".
+    let guide = [cand(1, "a", ["US: ESPN"]), cand(2, "b", ["ESPN HD"])]
+    #expect(Matcher.match([query(10, name: "USA: Espn")], against: guide)[10] == nil)
+    let tieBroken = [cand(1, "a", ["US: ESPN"], programmes: false), cand(2, "b", ["ESPN HD"])]
+    #expect(Matcher.match([query(10, name: "USA: Espn")], against: tieBroken)[10]
+        == Match(guideRef: 2, kind: .normalizedName))
+}
+
+/// Two guide sources can both list a channel id.
+@Test func tvgIDWithSeveralHits() {
+    let guide = [cand(1, "espn.us", programmes: false), cand(2, "espn.us"), cand(3, "x", ["ESPN"])]
+    #expect(Matcher.match([query(10, name: "ESPN", tvgID: "espn.us")], against: guide)[10]
+        == Match(guideRef: 2, kind: .id))
+    // Several with programmes: ambiguous, and the name rule is not tried.
+    let both = [cand(1, "espn.us"), cand(2, "espn.us"), cand(3, "x", ["ESPN"])]
+    #expect(Matcher.match([query(10, name: "ESPN", tvgID: "espn.us")], against: both)[10] == nil)
+}
+
 @Test func unmatchedChannelIsAbsent() {
     let guide = [cand(1, "a", ["BBC One"])]
     let r = Matcher.match([query(10, name: "Nothing", tvgID: "zzz", tvgName: "Nope")], against: guide)

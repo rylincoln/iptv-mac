@@ -9,8 +9,7 @@ public enum NameNormalizer {
         var text = Substring(s.lowercased())
         text = removingCountryPrefix(text)
 
-        var tokens: [Substring] = []
-        text.split(whereSeparator: { !($0.isLetter || $0.isNumber) }).forEach { tokens.append($0) }
+        var tokens = text.split(whereSeparator: { !($0.isLetter || $0.isNumber) })
         if tokens.count > 1, let last = tokens.last, suffixes.contains(String(last)) {
             tokens.removeLast()
         }
@@ -74,6 +73,15 @@ public struct Match: Equatable, Sendable {
 }
 
 public enum Matcher {
+    /// What one rule found for a channel.
+    private enum Outcome {
+        /// Nothing: the next rule is tried.
+        case noCandidate
+        /// Several candidates and no tie-break: no link, and no later rule is tried.
+        case ambiguous
+        case linked(guideRef: Int64)
+    }
+
     public static func match(_ channels: [MatchQuery], against guide: [MatchCandidate]) -> [Int64: Match] {
         // Indexes map a key to guide positions; built once, so matching is linear.
         var byID: [String: [Int]] = [:]
@@ -95,36 +103,37 @@ public enum Matcher {
             }
         }
 
-        func resolve(_ positions: Set<Int>) -> Int64?? {
-            // nil: rule found nothing, try the next rule. .some(nil): ambiguous, stop.
-            if positions.isEmpty { return nil }
-            if positions.count == 1, let p = positions.first { return .some(guide[p].ref) }
+        func outcome(_ positions: Set<Int>) -> Outcome {
+            if positions.isEmpty { return .noCandidate }
+            if positions.count == 1, let p = positions.first { return .linked(guideRef: guide[p].ref) }
             let withProgrammes = positions.filter { guide[$0].hasProgrammes }
-            if withProgrammes.count == 1, let p = withProgrammes.first { return .some(guide[p].ref) }
-            return .some(nil)
+            if withProgrammes.count == 1, let p = withProgrammes.first { return .linked(guideRef: guide[p].ref) }
+            return .ambiguous
+        }
+
+        func positions(_ index: [String: [Int]], _ keys: [String]) -> Set<Int> {
+            var found: Set<Int> = []
+            for key in keys { if let hits = index[key] { found.formUnion(hits) } }
+            return found
         }
 
         var result: [Int64: Match] = [:]
         for channel in channels {
-            let names = [channel.name, channel.tvgName].compactMap { $0 }.filter { !$0.isEmpty }
-
-            var rule1: Set<Int> = []
-            if let tvgID = channel.tvgID, let hits = byID[tvgID] { rule1.formUnion(hits) }
-
-            var rule2: Set<Int> = []
-            for name in names { if let hits = byName[name] { rule2.formUnion(hits) } }
-
-            var rule3: Set<Int> = []
-            for name in names {
-                let key = NameNormalizer.normalize(name)
-                if let hits = byNormalized[key] { rule3.formUnion(hits) }
+            // A rule's keys are worked out only when every earlier rule found nothing: most channels are
+            // decided by id, and normalising is the costly part.
+            var kind = MatchKind.id
+            var found = Outcome.noCandidate
+            if let tvgID = channel.tvgID, let hits = byID[tvgID] { found = outcome(Set(hits)) }
+            if case .noCandidate = found {
+                let names = [channel.name, channel.tvgName].compactMap { $0 }.filter { !$0.isEmpty }
+                kind = .name
+                found = outcome(positions(byName, names))
+                if case .noCandidate = found {
+                    kind = .normalizedName
+                    found = outcome(positions(byNormalized, names.map(NameNormalizer.normalize)))
+                }
             }
-
-            for (positions, kind) in [(rule1, MatchKind.id), (rule2, .name), (rule3, .normalizedName)] {
-                guard let outcome = resolve(positions) else { continue }
-                if let ref = outcome { result[channel.channelID] = Match(guideRef: ref, kind: kind) }
-                break
-            }
+            if case .linked(let ref) = found { result[channel.channelID] = Match(guideRef: ref, kind: kind) }
         }
         return result
     }
