@@ -260,6 +260,27 @@ private let now = Date(timeIntervalSince1970: 1_800_000_000)
         #expect(reopened.bufferMs(forStreamURL: url("a")) == 1500)
     }
 
+    /// A big write grows the write-ahead log; once it is checkpointed, the next write cuts the file back
+    /// rather than leaving it at its high-water size for as long as the app runs. (macOS's SQLite does
+    /// this by default: its `journal_size_limit` is 32 KB.)
+    @Test func writeAheadLogShrinksAfterABigWrite() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tuner-store-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = dir.appendingPathComponent("tuner.sqlite").path
+        func walBytes() -> Int {
+            ((try? FileManager.default.attributesOfItem(atPath: path + "-wal"))?[.size] as? Int) ?? 0
+        }
+        let limit = 8 * 1_048_576
+        let store = try Store(path: path)
+        // About 10 MB of pages in one transaction (the key is stored in the table and its index).
+        store.setBufferMs(1000, forStreamURL: String(repeating: "x", count: 5 * 1_048_576))
+        #expect(walBytes() > limit)
+        store.setBufferMs(2000, forStreamURL: url("a"))
+        #expect(walBytes() <= limit)
+        #expect(store.bufferMs(forStreamURL: url("a")) == 2000)
+    }
+
     @Test func replaceWithEmptyListClearsChannels() throws {
         let (store, id) = try seeded([ch("A", "a")])
         try store.replaceChannels(sourceID: id, with: [])
