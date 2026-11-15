@@ -468,8 +468,10 @@ typealias ChannelSection = TunerCore.Section
         }
     }
 
-    /// A failed read keeps what is shown.
-    private func reloadRows(selectingFirst: Bool = false) {
+    /// A failed read keeps what is shown. `leavingEmptyRecents`: when the section is Recents and it
+    /// has nothing in it, shows All channels instead (after an import, so the first run does not land
+    /// on an empty list).
+    private func reloadRows(selectingFirst: Bool = false, leavingEmptyRecents: Bool = false) {
         rowsLoad?.cancel()
         let section = currentSection
         let store = self.store
@@ -478,6 +480,10 @@ typealias ChannelSection = TunerCore.Section
                 try? store.channels(in: section, at: Date())
             }.value
             guard !Task.isCancelled, section == currentSection, let loaded else { return }
+            if leavingEmptyRecents, section == .recents, loaded.isEmpty {
+                self.section = .all  // reloads
+                return
+            }
             apply(rows: loaded)
             if selectingFirst, selectedChannelID == nil { selectedChannelID = loaded.first?.id }
         }
@@ -543,7 +549,7 @@ typealias ChannelSection = TunerCore.Section
         let importer = self.importer
         importMessage = await Task.detached(priority: .utility) { await work(store, importer) }.value
         isImporting = false
-        reloadRows()
+        reloadRows(leavingEmptyRecents: true)
         reloadHasChannels()
         reloadNowPlaying()
         if isGroupsExpanded { loadGroups() }
