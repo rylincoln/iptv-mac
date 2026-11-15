@@ -299,12 +299,18 @@ typealias ChannelSection = TunerCore.Section
 
     /// Stars or unstars every row shown with the stream URL: the list, the playing channel and the
     /// search results. Favourites are kept by stream URL, so every row with that URL changes. Unstarred
-    /// rows leave the Favourites section at once.
+    /// rows leave the Favourites section at once; a selection among them moves to the row that takes
+    /// its place, so ⌘D and Return still act on a highlighted row.
     private func showFavourite(_ on: Bool, streamURL: String) {
         for index in rows.indices where rows[index].streamURL == streamURL {
             rows[index].isFavourite = on
         }
-        if currentSection == .favourites, !on { rows.removeAll { $0.streamURL == streamURL } }
+        if currentSection == .favourites, !on {
+            let isGone: (ChannelRow) -> Bool = { $0.streamURL == streamURL }
+            let selection = ListSelection.afterRemoving(from: rows, where: isGone, selected: selectedChannelID)
+            rows.removeAll(where: isGone)
+            if selection != selectedChannelID { selectedChannelID = selection }
+        }
         if playingChannel?.streamURL == streamURL { playingChannel?.isFavourite = on }
         if var results = searchResults {
             for index in results.channels.indices where results.channels[index].streamURL == streamURL {
