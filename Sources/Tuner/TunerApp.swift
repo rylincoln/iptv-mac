@@ -257,6 +257,10 @@ private struct ChannelCommands: Commands {
                     .keyboardShortcut("d", modifiers: .command)
                 Button("Previous Channel") { model?.playPrevious() }
                     .keyboardShortcut("[", modifiers: .command)
+                // Closes the stream, which frees the provider connection, and lets the display sleep.
+                Button("Stop") { model?.stop() }
+                    .keyboardShortcut(".", modifiers: .command)
+                    .disabled((model?.status ?? .idle) == .idle)
                 Divider()
                 ForEach(1...9, id: \.self) { number in
                     Button("Play Recent \(number)") { model?.playRecent(number - 1) }
