@@ -74,6 +74,7 @@ private func pc(_ name: String, _ path: String, tvgID: String? = nil, group: Str
         #expect(try store.nowPlaying(at: at(0.5))[ref]?.title == "Current")
         #expect(try store.nowPlaying(at: at(0))[ref]?.title == "Current")
         #expect(try store.nowPlaying(at: at(1))[ref]?.title == "Next")
+        #expect(try store.nowPlaying(at: at(2))[ref] == nil)
     }
 
     @Test func nowPlayingEmptyWhenGapInSchedule() throws {
@@ -156,6 +157,7 @@ private func pc(_ name: String, _ path: String, tvgID: String? = nil, group: Str
             prog("n", 0, 2, "Headlines", categories: ["News"]),
         ])
         #expect(try store.channels(in: .sports, at: at(0.5)).map(\.name) == ["Game"])
+        #expect(try store.channels(in: .sports, at: at(1)).isEmpty)
         #expect(try store.channels(in: .sports, at: at(1.5)).isEmpty)
     }
 
@@ -168,5 +170,17 @@ private func pc(_ name: String, _ path: String, tvgID: String? = nil, group: Str
         let playing = try store.nowPlaying(at: at(0.5))
         #expect(playing.count == 2)
         #expect(Set(playing.values.map(\.title)) == ["One", "Two"])
+    }
+
+    @Test func expiredProgrammesOfOtherSourceArePrunedOnImport() throws {
+        let store = try Store.inMemory()
+        _ = try loadGuide(store, location: "http://example.invalid/g1",
+                          channels: [guideChannel("alpha", "Alpha")], programmes: [prog("alpha", 0, 1, "A")])
+        #expect(try store.nowPlaying(at: at(0.5)).count == 1)
+        let b = try store.addSource(kind: .guide, location: "http://example.invalid/g2")
+        try store.replaceGuide(sourceID: b, now: at(30)) { writer in
+            try writer.add(guideChannel("beta", "Beta"))
+        }
+        #expect(try store.nowPlaying(at: at(0.5)).isEmpty)
     }
 }

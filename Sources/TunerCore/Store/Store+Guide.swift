@@ -62,6 +62,8 @@ extension Store {
                 """, arguments: [sourceID])
             try db.execute(sql: "DELETE FROM guideChannel WHERE sourceID = ?", arguments: [sourceID])
             try load(StatementGuideWriter(db: db, sourceID: sourceID, cutoff: cutoff))
+            try db.execute(
+                sql: "DELETE FROM programme WHERE start < ? AND stop < ?", arguments: [cutoff, cutoff])
             try db.execute(sql: "INSERT INTO programme_fts(programme_fts) VALUES ('rebuild')")
             try Self.rematch(db)
         }
