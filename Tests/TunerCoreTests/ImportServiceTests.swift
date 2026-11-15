@@ -112,6 +112,17 @@ private func source(_ store: Store, _ id: Int64) throws -> SourceRow {
     try #require(try store.sources().first { $0.id == id })
 }
 
+/// Adds a channel that matches the guide's channel and checks the imported programme is on air.
+private func expectGuideInStore(_ store: Store) throws {
+    let playlist = try store.addSource(kind: .playlist, location: "/guide-check-\(UUID().uuidString)")
+    try store.replaceChannels(sourceID: playlist, with: [
+        ParsedChannel(name: "One", tvgID: "one.example", streamURL: "http://example.invalid/stream/1"),
+    ])
+    let channel = try #require(try store.channels(in: .all, at: fixedNow).first)
+    let ref = try #require(channel.guideRef)
+    #expect(try store.nowPlaying(at: fixedNow)[ref]?.title == "Evening News")
+}
+
 // MARK: - Tests
 
 @Suite struct ImportServiceTests {
@@ -137,6 +148,7 @@ private func source(_ store: Store, _ id: Int64) throws -> SourceRow {
             let outcome = try await service(store).importGuide(sourceID: id)
             #expect(outcome == .imported(items: 1, skipped: 1))
             #expect(try source(store, id).lastError == nil)
+            try expectGuideInStore(store)
         }
     }
 
@@ -150,6 +162,7 @@ private func source(_ store: Store, _ id: Int64) throws -> SourceRow {
         let row = try source(store, id)
         #expect(row.etag == "\"v1\"")
         #expect(row.itemCount == 1)
+        try expectGuideInStore(store)
     }
 
     @Test func sendsIfNoneMatchAndHandles304() async throws {
@@ -225,10 +238,13 @@ private func source(_ store: Store, _ id: Int64) throws -> SourceRow {
         let id = try store.addSource(kind: .guide, location: "https://example.invalid/guide.xml.gz")
         let outcome = try await service(store, session: stubSession()).importGuide(sourceID: id)
         #expect(outcome == .imported(items: 1, skipped: 1))
+        try expectGuideInStore(store)
+        let localStore = try Store.inMemory()
         try await withTempFile(compressed) { path in
-            let local = try store.addSource(kind: .guide, location: path)
-            #expect(try await service(store).importGuide(sourceID: local) == .imported(items: 1, skipped: 1))
+            let local = try localStore.addSource(kind: .guide, location: path)
+            #expect(try await service(localStore).importGuide(sourceID: local) == .imported(items: 1, skipped: 1))
         }
+        try expectGuideInStore(localStore)
     }
 
     @Test func latin1PlaylistDecodes() async throws {
