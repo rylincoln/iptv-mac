@@ -1,53 +1,6 @@
 import SwiftUI
 import TunerCore
 
-/// One row of the search results, as the list selects it.
-enum SearchResultID: Hashable {
-    case onNow(programmeID: Int64, channelID: Int64)
-    case later(programmeID: Int64, channelID: Int64)
-    case channel(Int64)
-}
-
-extension SearchResults {
-    var isEmpty: Bool { onNow.isEmpty && later.isEmpty && channels.isEmpty }
-
-    /// The top row, in the order the list shows the sections.
-    var firstResultID: SearchResultID? {
-        if let hit = onNow.first { return hit.onNowID }
-        if let hit = later.first { return hit.laterID }
-        return channels.first?.resultID
-    }
-
-    /// The row to select in these results, found again for the same text, where `id` was selected
-    /// before: the same row if it is here, the same programme on now if it was later and has begun,
-    /// and otherwise the top row.
-    func selection(following id: SearchResultID?) -> SearchResultID? {
-        switch id {
-        case .onNow(let programmeID, let channelID):
-            if onNow.contains(where: { $0.programme.id == programmeID && $0.channel.id == channelID }) { return id }
-        case .later(let programmeID, let channelID):
-            if later.contains(where: { $0.programme.id == programmeID && $0.channel.id == channelID }) { return id }
-            if onNow.contains(where: { $0.programme.id == programmeID && $0.channel.id == channelID }) {
-                return .onNow(programmeID: programmeID, channelID: channelID)
-            }
-        case .channel(let channelID):
-            if channels.contains(where: { $0.id == channelID }) { return id }
-        case nil:
-            break
-        }
-        return firstResultID
-    }
-}
-
-extension ProgrammeHit {
-    var onNowID: SearchResultID { .onNow(programmeID: programme.id, channelID: channel.id) }
-    var laterID: SearchResultID { .later(programmeID: programme.id, channelID: channel.id) }
-}
-
-extension ChannelRow {
-    var resultID: SearchResultID { .channel(id) }
-}
-
 /// Shown over the channel list, which stays in the window beneath it, while a search has results:
 /// "On now", "Later" and "Channels", each left out when empty, as one list the arrow keys move
 /// straight through. Return or a double-click acts on a row (`AppModel.activateSearchResult`).
@@ -156,23 +109,5 @@ private struct ProgrammeHitRow: View {
             }
         }
         .frame(height: Self.height)
-    }
-}
-
-/// A programme's start in the Mac's time zone and format: "8:00 PM" today, "Sat 8:00 PM" on another
-/// day, "Nov 21 at 8:00 PM" six or more days on (`StartTimeForm`). The styles are made once;
-/// formatting reuses them.
-enum StartTime {
-    private static let time = Date.FormatStyle(date: .omitted, time: .shortened)
-    private static let dayAndTime = Date.FormatStyle(date: .omitted, time: .shortened).weekday(.abbreviated)
-    private static let dateAndTime = Date.FormatStyle(date: .omitted, time: .shortened).month(.abbreviated).day()
-
-    /// `days` is worked out once by the caller, not once per row.
-    static func text(_ start: Date, days: StartTimeForm.Days) -> String {
-        switch days.form(of: start) {
-        case .time: return start.formatted(time)
-        case .weekdayAndTime: return start.formatted(dayAndTime)
-        case .dateAndTime: return start.formatted(dateAndTime)
-        }
     }
 }
