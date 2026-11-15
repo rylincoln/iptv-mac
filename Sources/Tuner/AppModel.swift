@@ -121,17 +121,11 @@ typealias ChannelSection = TunerCore.Section
     /// Fires once, on the next minute boundary; exists only while the window is visible.
     @ObservationIgnored private var minuteTimer: Timer?
     @ObservationIgnored private var isWindowVisible = false
-    /// Waits out the pause in typing, then runs the store query.
-    @ObservationIgnored private var searchLoad: Task<Void, Never>?
-    /// The store query running, if any. The next one starts only after it has finished.
-    @ObservationIgnored private var searchQuery: Task<SearchResults?, Never>?
+    /// Runs the searches the field asks for: the pause in typing, one store query at a time, only
+    /// the latest text's results delivered.
+    @ObservationIgnored private let search = LatestSearch<SearchRead>()
     /// The text `searchResults` were found for.
     @ObservationIgnored private var resultsText: String?
-    /// Counts the searches `scheduleSearch` has started.
-    @ObservationIgnored private var searchesStarted: UInt64 = 0
-    /// The search `scheduleSearch` started, while it waits or runs; it marks itself done. A refresh of
-    /// the results shown leaves it alone (`refreshSearchResults`).
-    @ObservationIgnored private var searchUnderWay: UInt64?
     /// Return was pressed in the search field before the results for its text were in.
     @ObservationIgnored private var activateWhenSearched = false
     /// Deletes what an import cut short by a quit or a crash left in the temporary folder. Started at
@@ -573,73 +567,59 @@ typealias ChannelSection = TunerCore.Section
         return searchResultHit(id)?.channel
     }
 
-    /// After `searchPause` with no further change, searches the store off the main thread. A newer
-    /// change cancels a search still waiting. A store query already running cannot be stopped, so the
-    /// next one waits for it to finish: two never run at once. Results are applied only if the text is
-    /// still the text they were found for. Text with nothing to search for clears them at once.
+    /// After `searchPause` with no further change, searches the store off the main thread
+    /// (`LatestSearch`). Text with nothing to search for clears the results at once.
     private func scheduleSearch() {
-        searchLoad?.cancel()
-        searchLoad = nil
-        searchUnderWay = nil
         activateWhenSearched = false
         let text = currentSearchText
         guard Self.hasSearchTerms(text) else {
+            search.cancel()
             clearSearchResults()
             return
         }
-        let store = self.store
-        searchesStarted &+= 1
-        let search = searchesStarted
-        searchUnderWay = search
-        searchLoad = Task {
-            // Marked done however it ends; a search cancelled for a newer one leaves the newer one's mark.
-            defer { if searchUnderWay == search { searchUnderWay = nil } }
-            do { try await Task.sleep(for: Self.searchPause) } catch { return }
-            _ = await searchQuery?.value
-            guard !Task.isCancelled else { return }
-            let ticket = favouriteWrites.ticket
-            let query = Task.detached(priority: .userInitiated) { try? store.search(text, at: Date()) }
-            searchQuery = query
-            let found = await query.value
-            if searchQuery == query { searchQuery = nil }  // finished: nothing to wait for, nothing kept
-            guard !Task.isCancelled, text == currentSearchText, let found else { return }  // a failed read keeps what is shown
-            searchUnderWay = nil  // done, so the refresh below may run
-            apply(found, for: text)
-            if favouriteWrites.check(.search, since: ticket) == .readAgainNow { refreshSearchResults() }
+        search.search(text, after: Self.searchPause, read: searchRead(text, priority: .userInitiated)) { [weak self] read in
+            guard let self else { return }
+            apply(read.results, for: text)
+            if favouriteWrites.check(.search, since: read.ticket) == .readAgainNow { refreshSearchResults() }
         }
     }
 
     /// On the minute: the results showing are found again for their text, so a programme that has
     /// ended leaves On now and one that has begun moves up from Later. Results equal to those showing
     /// change nothing. Others replace them with the selection kept where it can be
-    /// (`SearchResults.selection(following:in:)`) and the list left where it is scrolled. A search for
-    /// newly typed text cancels this, and as with every search, a store query never starts while
-    /// another runs. While a search `scheduleSearch` started waits or runs, this does nothing: that
-    /// search reads the store afresh anyway, and it may be the one an import starts once it has
-    /// reassigned every id, which a refresh, keeping the selection by the old ids, must not cancel.
+    /// (`SearchResults.selection(following:in:)`) and the list left where it is scrolled. While a
+    /// search waits or runs this does nothing (`LatestSearch.refresh`): that search reads the store
+    /// afresh anyway, and it may be the one an import starts once it has reassigned every id, which
+    /// a refresh, keeping the selection by the old ids, must not cancel.
     private func refreshSearchResults() {
-        guard searchUnderWay == nil, searchResults != nil, let text = resultsText, text == currentSearchText
-        else { return }
-        searchLoad?.cancel()
-        let store = self.store
-        searchLoad = Task {
-            _ = await searchQuery?.value
-            guard !Task.isCancelled else { return }
-            let ticket = favouriteWrites.ticket
-            let query = Task.detached(priority: .utility) { try? store.search(text, at: Date()) }
-            searchQuery = query
-            let found = await query.value
-            if searchQuery == query { searchQuery = nil }
-            // A failed read keeps what is shown.
-            guard !Task.isCancelled, text == currentSearchText, text == resultsText, let found else { return }
+        guard searchResults != nil, let text = resultsText, text == currentSearchText else { return }
+        search.refresh(text, read: searchRead(text, priority: .utility)) { [weak self] read in
+            guard let self, text == resultsText else { return }
             // Not shown if it may have missed a favourite written meanwhile; read again after the write.
-            let use = favouriteWrites.use(.search, since: ticket, replacingShown: true)
-            if use.show, let old = searchResults, found != old {
-                searchResults = found
-                let selection = found.selection(following: selectedResultID, in: old)
+            let use = favouriteWrites.use(.search, since: read.ticket, replacingShown: true)
+            if use.show, let old = searchResults, read.results != old {
+                searchResults = read.results
+                let selection = read.results.selection(following: selectedResultID, in: old)
                 if selection != selectedResultID { selectedResultID = selection }
             }
             if use.readAgain { refreshSearchResults() }
+        }
+    }
+
+    /// One store search, with the favourite-writes ticket taken as it began. A failed read is nil,
+    /// which keeps what is shown.
+    private struct SearchRead: Sendable {
+        var results: SearchResults
+        var ticket: OptimisticWrites<StarRead>.Ticket
+    }
+
+    private func searchRead(_ text: String, priority: TaskPriority) -> LatestSearch<SearchRead>.Read {
+        { [weak self] in
+            guard let self else { return nil }
+            let ticket = favouriteWrites.ticket
+            let store = self.store
+            let results = await Task.detached(priority: priority) { try? store.search(text, at: Date()) }.value
+            return results.map { SearchRead(results: $0, ticket: ticket) }
         }
     }
 
