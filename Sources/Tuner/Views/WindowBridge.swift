@@ -90,18 +90,26 @@ final class WindowBridgeView: NSView {
             guard !isFullScreen else { return }  // there already, by this or by the owner beforehand
             restoreWindowed = true
         } else {
-            guard restoreWindowed, isFullScreen else { return }
+            guard isFullScreen else {
+                // Windowed, and no transition under way: the video never took the window full screen,
+                // so a full screen the owner chooses later is theirs to keep.
+                restoreWindowed = false
+                return
+            }
+            guard restoreWindowed else { return }
         }
         inTransition = true
         transitionBegan = false
         transitionStartedAt = now
         window.toggleFullScreen(nil)
         // AppKit says it is starting before it returns. Had it not started (the window cannot go full
-        // screen just now), nothing is left waiting.
+        // screen just now), nothing is left waiting, and a window that stayed windowed has nothing to
+        // be restored to.
         if !transitionBegan {
             DispatchQueue.main.async { [weak self] in
                 guard let self, !self.transitionBegan else { return }
                 self.inTransition = false
+                if self.window?.styleMask.contains(.fullScreen) == false { self.restoreWindowed = false }
             }
         }
     }
