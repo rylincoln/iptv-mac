@@ -37,7 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// so a covered list never has the keyboard.
 enum PaneFocus: Hashable { case channelList, player, search, covered }
 
-private struct MainWindow: View {
+struct MainWindow: View {
     let model: AppModel
     @FocusState private var focus: PaneFocus?
     /// The player pane alone, filling the screen.
@@ -164,7 +164,7 @@ private struct SourcePrompt: Identifiable {
 /// The main window's AppKit side: reports whether the window is on screen (not minimised, hidden,
 /// covered or on another Space) and when it leaves full screen by any route, and takes the window in
 /// and out of full screen for the video.
-private struct WindowBridge: NSViewRepresentable {
+struct WindowBridge: NSViewRepresentable {
     let videoFullScreen: Bool
     let visibilityChanged: (Bool) -> Void
     let leftFullScreen: () -> Void
@@ -178,7 +178,7 @@ private struct WindowBridge: NSViewRepresentable {
     }
 }
 
-private final class WindowBridgeView: NSView {
+final class WindowBridgeView: NSView {
     var visibilityChanged: ((Bool) -> Void)?
     var leftFullScreen: (() -> Void)?
     private var observers: [NSObjectProtocol] = []
@@ -284,7 +284,7 @@ private final class WindowBridgeView: NSView {
 
 /// One import runs at a time, and a request made meanwhile is not queued: while one runs, these items
 /// are disabled and the last of them reads "Importing…" to say why.
-private struct SourceCommands: Commands {
+struct SourceCommands: Commands {
     let model: AppModel?
 
     var body: some Commands {
@@ -309,7 +309,7 @@ private struct SourceCommands: Commands {
 // MARK: - Channel shortcuts
 
 /// Menu items, so the shortcuts work whichever pane has the keyboard, full screen included.
-private struct ChannelCommands: Commands {
+struct ChannelCommands: Commands {
     let model: AppModel?
 
     var body: some Commands {
@@ -361,7 +361,7 @@ private struct ChannelCommands: Commands {
 }
 
 /// One text field for a playlist or guide URL.
-private struct SourceURLSheet: View {
+struct SourceURLSheet: View {
     let kind: SourceKind
     let add: (String) -> Void
     @Environment(\.dismiss) private var dismiss
