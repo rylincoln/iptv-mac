@@ -4,9 +4,9 @@
 # Set VLCKIT_ARCHIVE to a local copy of the archive to skip the download (it is still verified).
 set -euo pipefail
 
-VERSION="3.7.3"
-ARCHIVE="VLCKit-3.7.3-319ed2c0-79128878.tar.xz"
-SHA256="019afdae4e2e2d0f3ac325fac8f7ba0af25dca70b9d157df7d60db88e0be8e5d"
+VERSION="3.7.4"
+ARCHIVE="VLCKit-3.0-20260922-1444.tar.xz"
+SHA256="d57a80455900e031ec87b08bdc684ba58989f9cec317b04739b2ee6b1d7a1868"
 BASE_URL="https://download.videolan.org/pub/cocoapods/prod"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

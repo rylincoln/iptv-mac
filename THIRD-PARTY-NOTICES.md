@@ -5,7 +5,7 @@ of which is stored in this repository.
 
 ## VLCKit and libVLC
 
-- What: the playback engine. `scripts/fetch-vlckit.sh` downloads VideoLAN's prebuilt VLCKit 3.7.3
+- What: the playback engine. `scripts/fetch-vlckit.sh` downloads VideoLAN's prebuilt VLCKit 3.7.4
   for macOS, checks its SHA-256, and unpacks it to `Vendor/` (git-ignored). `scripts/bundle.sh`
   copies it, unmodified, into `Tuner.app/Contents/Frameworks/`.
 - Licence: GNU Lesser General Public License, version 2.1 or later (`LICENSES/LGPL-2.1.txt`, also
