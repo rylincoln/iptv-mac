@@ -473,6 +473,7 @@ extension PlaybackSupervisorTests {
             rig.tick(progress: true, state: .buffering)
             rig.tick(progress: true, state: .playing)
         }
+        #expect(rig.memory.bufferMs(forStreamURL: urlA) == 8000)  // the storm undid the step down
         #expect(rig.status == .playing)
         #expect(rig.player.plays.count == 1)
         rig.freeze()
@@ -480,6 +481,25 @@ extension PlaybackSupervisorTests {
         #expect(rig.memory.bufferMs(forStreamURL: urlA) == 8000)
         rig.tick()
         #expect(rig.player.plays.last?.bufferMs == 8000)
+    }
+
+    /// A stutter ridden out at the top step is not clean playback: the next step down needs a full
+    /// clean interval counted from the storm, however much the stream progresses during and after it.
+    @Test func stutterRiddenOutAtTheTopStepRestartsTheCleanInterval() {
+        let rig = Rig(remembered: 8000)
+        rig.startPlaying()
+        rig.run(1700, step: 5, progress: true, state: .playing)  // 100 s short of a step down
+        for _ in 1...3 {
+            rig.tick(progress: true, state: .buffering)
+            rig.tick(progress: true, state: .playing)
+        }
+        #expect(rig.status == .playing)
+        rig.run(200, step: 5, progress: true, state: .playing)  // past thirty minutes from the start
+        #expect(rig.memory.bufferMs(forStreamURL: urlA) == 8000)
+        rig.run(1700, step: 5, progress: true, state: .playing)  // past thirty minutes from the storm
+        #expect(rig.memory.bufferMs(forStreamURL: urlA) == 4000)
+        #expect(rig.supervisor.currentBufferMs == 8000)
+        #expect(rig.player.plays.count == 1)
     }
 
     @Test func wakeGapIsNotAStall() {

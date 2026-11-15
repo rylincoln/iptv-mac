@@ -170,6 +170,11 @@ import Foundation
             // A restart could not add buffer here; it would only cost a connection and an attempt.
             // Ride it out: a stream that stops progressing is still caught as a stall.
             rebufferTimes.removeAll(keepingCapacity: true)
+            // But a storm is not clean playback: undo a step down taken meanwhile (at the top step this
+            // puts the next and remembered buffer back to the live one), and count the clean interval
+            // for the next step down from now.
+            moveBuffer(by: 1)
+            stepDownSince = time
         }
 
         if progressed {
