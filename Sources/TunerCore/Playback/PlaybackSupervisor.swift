@@ -6,7 +6,7 @@ import Foundation
 @MainActor public final class PlaybackSupervisor {
     public enum Status: Equatable, Sendable { case idle, starting, playing, reconnecting(attempt: Int), unavailable }
 
-    private enum Failure { case failedStart, stall, stutter }
+    private enum Failure { case failedStart, stall, stutter, lostInSleep }
 
     /// Spacing between two `player.play` calls for the same stream, whatever the policy says.
     private static let minPlaySpacing: TimeInterval = 1
@@ -36,6 +36,7 @@ import Foundation
     private var stableSince: Date?
     private var stepDownSince: Date?
     private var rebufferTimes: [Date] = []
+    private var postWake = false                 // woke while playing; no progress seen since
 
     public init(player: Player, memory: BufferMemory, now: @escaping () -> Date, policy: SupervisorPolicy = .default) {
         self.player = player
@@ -101,6 +102,10 @@ import Foundation
         if isWake(at: time) {
             if status == .starting || status == .playing {
                 forgetProgress(at: time)
+                if status == .playing {
+                    postWake = true  // the connection is probably dead; not the stream's fault
+                    failures = 0
+                }
             } else {
                 restartFromAttemptOne(at: time)
             }
@@ -133,6 +138,7 @@ import Foundation
         }
 
         if progressed {
+            postWake = false
             lastProgressAt = time
             if !hasProgressed {
                 hasProgressed = true
@@ -152,7 +158,7 @@ import Foundation
 
         if hasProgressed {
             if state == .error || state == .ended || time.timeIntervalSince(lastProgressAt) >= policy.stallAfter {
-                fail(.stall, at: time)
+                fail(postWake ? .lostInSleep : .stall, at: time)
             }
         } else if state == .error || state == .ended
                     || time.timeIntervalSince(attemptStartedAt) >= policy.startTimeout {
@@ -171,7 +177,7 @@ import Foundation
 
     private func fail(_ kind: Failure, at time: Date) {
         player.stop()
-        if kind != .failedStart { moveBuffer(by: 1) }
+        if kind == .stall || kind == .stutter { moveBuffer(by: 1) }
         resetRun()
         failures += 1
         reconnectCount += 1
@@ -267,6 +273,7 @@ import Foundation
 
     private func resetRun() {
         hasProgressed = false
+        postWake = false
         stableSince = nil
         stepDownSince = nil
         previousState = .idle

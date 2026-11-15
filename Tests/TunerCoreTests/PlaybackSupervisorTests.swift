@@ -358,7 +358,69 @@ final class FakeMemory: BufferMemory, @unchecked Sendable {
         rig.run(3, state: .playing)  // timers restarted at the wake tick
         #expect(rig.status == .playing)
         rig.tick(state: .playing)
-        #expect(rig.status == .reconnecting(attempt: 1))  // a real stall is still caught afterwards
+        #expect(rig.status == .reconnecting(attempt: 1))  // a stream lost in sleep is still caught afterwards...
+        #expect(rig.memory.bufferMs(forStreamURL: urlA) == nil)  // ...but is not billed to the buffer
+    }
+
+    /// Fails four times, recovers to .playing (not yet stable), returns the buffer in force.
+    private func rigRecoveredAfterFourFailures() -> (Rig, Int) {
+        let rig = Rig()
+        rig.startPlaying()
+        for delay in [1, 2, 5, 10] {
+            rig.freeze()
+            rig.run(delay, state: .playing)  // retry play fires on the last of these ticks
+            rig.tick(progress: true, state: .playing)
+        }
+        #expect(rig.status == .playing)
+        return (rig, rig.supervisor.currentBufferMs)
+    }
+
+    @Test func wakeWhilePlayingWithEndedStreamKeepsBufferAndBudget() {
+        let (rig, before) = rigRecoveredAfterFourFailures()
+        let saved = rig.memory.bufferMs(forStreamURL: urlA)
+        let plays = rig.player.plays.count
+        rig.clock.advance(7200)
+        rig.player.state = .playing
+        rig.supervisor.tick()
+        #expect(rig.status == .playing)
+        rig.tick(state: .ended)
+        #expect(rig.status == .reconnecting(attempt: 1))
+        #expect(rig.memory.bufferMs(forStreamURL: urlA) == saved)
+        #expect(rig.supervisor.currentBufferMs == before)
+        rig.tick()
+        #expect(rig.player.plays.count == plays + 1)
+        #expect(rig.player.plays.last?.bufferMs == before)
+    }
+
+    @Test func wakeWhilePlayingWithFrozenStreamKeepsBufferAndBudget() {
+        let (rig, before) = rigRecoveredAfterFourFailures()
+        let saved = rig.memory.bufferMs(forStreamURL: urlA)
+        let plays = rig.player.plays.count
+        rig.clock.advance(7200)
+        rig.player.state = .playing
+        rig.supervisor.tick()
+        rig.run(3, state: .playing)
+        #expect(rig.status == .playing)
+        rig.tick(state: .playing)  // 4 s frozen after the wake
+        #expect(rig.status == .reconnecting(attempt: 1))
+        #expect(rig.memory.bufferMs(forStreamURL: urlA) == saved)
+        rig.tick()
+        #expect(rig.player.plays.count == plays + 1)
+        #expect(rig.player.plays.last?.bufferMs == before)
+    }
+
+    @Test func stallAfterPostWakeProgressStillStepsBufferUp() {
+        let rig = Rig()
+        rig.startPlaying()
+        rig.clock.advance(7200)
+        rig.player.state = .playing
+        rig.supervisor.tick()
+        rig.tick(progress: true, state: .playing)  // the stream survived the sleep
+        rig.freeze()
+        #expect(rig.status == .reconnecting(attempt: 1))
+        #expect(rig.memory.bufferMs(forStreamURL: urlA) == 2000)
+        rig.tick()
+        #expect(rig.player.plays.last?.bufferMs == 2000)
     }
 
     @Test func wakeFromUnavailableRetriesFromAttemptOne() {
