@@ -25,11 +25,8 @@ enum FTSQuery {
 extension Store {
     private static let searchHorizon: TimeInterval = 7 * 24 * 3600
 
-    private static let hitColumns = """
-        p.id, p.guideRef, p.start, p.stop, p.title, p.subTitle, p.desc, p.isSport,
-        c.id, c.name, c.logoURL, c.groupTitle, c.streamURL, c.guideRef,
-        EXISTS (SELECT 1 FROM favourite f WHERE f.streamURL = c.streamURL)
-        """
+    /// A programme, then the channel it was found on.
+    private static let hitColumns = "\(programmeColumns), \(channelColumns)"
 
     /// Programmes (airing now, and starting within 7 days) and channels matching every typed term
     /// as a prefix. Each list holds at most `limit` entries; the limit is applied in SQL.
@@ -54,14 +51,12 @@ extension Store {
                 """, arguments: [seconds, horizon, match, limit])
             var channels: [ChannelRow] = []
             let cursor = try Row.fetchCursor(db, sql: """
-                SELECT c.id, c.name, c.logoURL, c.groupTitle, c.streamURL, c.guideRef,
-                    EXISTS (SELECT 1 FROM favourite f WHERE f.streamURL = c.streamURL)
-                FROM channel c
+                SELECT \(Self.channelColumns) FROM channel c
                 WHERE c.id IN (SELECT rowid FROM channel_fts WHERE channel_fts MATCH ?)
                 ORDER BY c.sortIndex, c.id LIMIT ?
                 """, arguments: [match, limit])
             while let row = try cursor.next() {
-                channels.append(Self.channel(row, from: 0))
+                channels.append(Self.channelRow(row, from: 0))
             }
             return SearchResults(onNow: onNow, later: later, channels: channels)
         }
@@ -73,21 +68,9 @@ extension Store {
         var result: [ProgrammeHit] = []
         let cursor = try Row.fetchCursor(db, sql: sql, arguments: arguments)
         while let row = try cursor.next() {
-            let start: Int64 = row[2]
-            let stop: Int64 = row[3]
-            let programme = ProgrammeRow(
-                id: row[0], guideRef: row[1],
-                start: Date(timeIntervalSince1970: TimeInterval(start)),
-                stop: Date(timeIntervalSince1970: TimeInterval(stop)),
-                title: row[4], subTitle: row[5], desc: row[6], isSport: row[7])
-            result.append(ProgrammeHit(programme: programme, channel: channel(row, from: 8)))
+            result.append(ProgrammeHit(
+                programme: programmeRow(row), channel: channelRow(row, from: programmeColumnCount)))
         }
         return result
-    }
-
-    private static func channel(_ row: Row, from i: Int) -> ChannelRow {
-        ChannelRow(
-            id: row[i], name: row[i + 1], logoURL: row[i + 2], groupTitle: row[i + 3],
-            streamURL: row[i + 4], guideRef: row[i + 5], isFavourite: row[i + 6])
     }
 }

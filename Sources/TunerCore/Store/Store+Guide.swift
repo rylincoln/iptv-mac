@@ -137,6 +137,24 @@ extension Store {
         }
     }
 
+    /// What a `ProgrammeRow` is read from, in `programmeRow(_:)`'s order, in a query that names the
+    /// programme `p`.
+    static let programmeColumns = "p.id, p.guideRef, p.start, p.stop, p.title, p.subTitle, p.desc, p.isSport"
+
+    /// Where columns read after `programmeColumns` start.
+    static let programmeColumnCount = programmeColumns.split(separator: ",").count
+
+    /// Reads `programmeColumns` from the first column on.
+    static func programmeRow(_ row: Row) -> ProgrammeRow {
+        let start: Int64 = row[2]
+        let stop: Int64 = row[3]
+        return ProgrammeRow(
+            id: row[0], guideRef: row[1],
+            start: Date(timeIntervalSince1970: TimeInterval(start)),
+            stop: Date(timeIntervalSince1970: TimeInterval(stop)),
+            title: row[4], subTitle: row[5], desc: row[6], isSport: row[7])
+    }
+
     /// The programme airing at `at` (start <= at < stop) per guide channel.
     public func nowPlaying(at: Date) throws -> [Int64: ProgrammeRow] {
         let seconds = Self.unixSeconds(at)
@@ -144,11 +162,11 @@ extension Store {
             var result: [Int64: ProgrammeRow] = [:]
             // Ascending start, so on overlap the latest-starting programme wins.
             let cursor = try Row.fetchCursor(db, sql: """
-                SELECT id, guideRef, start, stop, title, subTitle, desc, isSport FROM programme
-                WHERE start <= ? AND stop > ? ORDER BY start
+                SELECT \(Self.programmeColumns) FROM programme p
+                WHERE p.start <= ? AND p.stop > ? ORDER BY p.start
                 """, arguments: [seconds, seconds])
             while let row = try cursor.next() {
-                let programme = Self.programme(row)
+                let programme = Self.programmeRow(row)
                 result[programme.guideRef] = programme
             }
             return result
@@ -161,20 +179,10 @@ extension Store {
     public func upcoming(guideRef: Int64, after: Date, limit: Int) throws -> [ProgrammeRow] {
         try db.read { db in
             try Row.fetchAll(db, sql: """
-                SELECT id, guideRef, start, stop, title, subTitle, desc, isSport FROM programme
-                WHERE guideRef = ? AND start >= ? ORDER BY start, id LIMIT ?
+                SELECT \(Self.programmeColumns) FROM programme p
+                WHERE p.guideRef = ? AND p.start >= ? ORDER BY p.start, p.id LIMIT ?
                 """, arguments: [guideRef, Self.unixSeconds(after), limit]
-            ).map(Self.programme)
+            ).map(Self.programmeRow)
         }
-    }
-
-    private static func programme(_ row: Row) -> ProgrammeRow {
-        let start: Int64 = row[2]
-        let stop: Int64 = row[3]
-        return ProgrammeRow(
-            id: row[0], guideRef: row[1],
-            start: Date(timeIntervalSince1970: TimeInterval(start)),
-            stop: Date(timeIntervalSince1970: TimeInterval(stop)),
-            title: row[4], subTitle: row[5], desc: row[6], isSport: row[7])
     }
 }

@@ -141,6 +141,66 @@ private func single(_ programmes: [ParsedProgramme]) throws -> Store {
         #expect(try store.search("football", at: now, limit: 50).onNow.count == 10)
     }
 
+    /// Every column of a hit's channel, the favourite flag included, is the one the channel list shows.
+    @Test func hitsCarryTheWholeChannelRow() throws {
+        let store = try Store.inMemory()
+        let p = try store.addSource(kind: .playlist, location: "http://example.invalid/list")
+        try store.replaceChannels(sourceID: p, with: [ParsedChannel(
+            name: "Alpha", tvgID: "alpha", logoURL: "http://example.invalid/a.png", groupTitle: "Sports",
+            streamURL: "http://example.invalid/a")])
+        let g = try store.addSource(kind: .guide, location: "http://example.invalid/guide")
+        try store.replaceGuide(sourceID: g, now: now) { writer in
+            try writer.add(ParsedGuideChannel(id: "alpha", displayNames: ["alpha"]))
+            try writer.add(prog("alpha", -1, 1, "Alpha Cup"))
+            try writer.add(prog("alpha", 2, 3, "Alpha Cup Final"))
+        }
+        try store.setFavourite(true, streamURL: "http://example.invalid/a", name: "Alpha")
+        let row = try #require(try store.channels(in: .all, at: now).first)
+        #expect(row.isFavourite && row.logoURL != nil && row.groupTitle != nil && row.guideRef != nil)
+        let results = try store.search("alpha", at: now)
+        #expect(results.onNow.map(\.channel) == [row])
+        #expect(results.later.map(\.channel) == [row])
+        #expect(results.channels == [row])
+        #expect(results.onNow.first?.programme == (try store.nowPlaying(at: now)[try #require(row.guideRef)]))
+    }
+
+    @Test func programmeEndingAtTheMomentIsNeitherOnNowNorLater() throws {
+        let store = try single([prog("alpha", -1, 0, "Football")])
+        let results = try store.search("football", at: now)
+        #expect(results.onNow.isEmpty)
+        #expect(results.later.isEmpty)
+    }
+
+    @Test func programmeStartingAtTheMomentIsOnNowNotLater() throws {
+        let store = try single([prog("alpha", 0, 1, "Football")])
+        let results = try store.search("football", at: now)
+        #expect(results.onNow.map(\.programme.title) == ["Football"])
+        #expect(results.later.isEmpty)
+    }
+
+    @Test func laterReachesExactlySevenDaysAhead() throws {
+        let week = 7.0 * 24
+        let store = try single([
+            prog("alpha", week, week + 1, "Football Edge"),
+            prog("alpha", week + 1.0 / 3600, week + 2, "Football Beyond"),
+        ])
+        #expect(try store.search("football", at: now).later.map(\.programme.title) == ["Football Edge"])
+    }
+
+    /// On now: by the channel's place in the playlist. Later: by start, then by that place.
+    @Test func orderingAcrossChannels() throws {
+        let store = try Store.inMemory()
+        try setUp(
+            store, playlist: [pc("Zulu", "z", tvgID: "z"), pc("Alpha", "a", tvgID: "a")], guide: ["z", "a"],
+            programmes: [
+                prog("a", -1, 1, "Football A"), prog("z", -0.5, 1, "Football Z"),
+                prog("a", 2, 3, "Football A2"), prog("z", 3, 4, "Football Z2"), prog("z", 2, 3, "Football Z3"),
+            ])
+        let results = try store.search("football", at: now)
+        #expect(results.onNow.map(\.programme.title) == ["Football Z", "Football A"])
+        #expect(results.later.map(\.programme.title) == ["Football Z3", "Football A2", "Football Z2"])
+    }
+
     @Test func syntaxCharactersNeverThrow() throws {
         let store = try single([prog("alpha", -1, 1, "Football")])
         for text in ["\"", "a\"b", "-", "*", "NEAR(", "a:b", "(", "x OR", "🏈"] {

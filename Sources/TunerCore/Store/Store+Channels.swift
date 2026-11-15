@@ -94,11 +94,22 @@ extension Store {
         }
     }
 
+    /// What a `ChannelRow` is read from, in `channelRow(_:from:)`'s order, in a query that names the
+    /// channel `c`. Shared by every query that returns channels, so their columns cannot drift apart.
+    static let channelColumns = """
+        c.id, c.name, c.logoURL, c.groupTitle, c.streamURL, c.guideRef,
+        EXISTS (SELECT 1 FROM favourite f WHERE f.streamURL = c.streamURL)
+        """
+
+    /// Reads `channelColumns` from column `first` on.
+    static func channelRow(_ row: Row, from first: Int) -> ChannelRow {
+        ChannelRow(
+            id: row[first], name: row[first + 1], logoURL: row[first + 2], groupTitle: row[first + 3],
+            streamURL: row[first + 4], guideRef: row[first + 5], isFavourite: row[first + 6])
+    }
+
     public func channels(in section: Section, at date: Date) throws -> [ChannelRow] {
-        let columns = """
-            c.id, c.name, c.logoURL, c.groupTitle, c.streamURL, c.guideRef,
-            EXISTS (SELECT 1 FROM favourite f WHERE f.streamURL = c.streamURL)
-            """
+        let columns = Self.channelColumns
         let sql: String
         var arguments: StatementArguments = []
         switch section {
@@ -134,9 +145,7 @@ extension Store {
             var rows: [ChannelRow] = []
             let cursor = try Row.fetchCursor(db, sql: sql, arguments: arguments)
             while let row = try cursor.next() {
-                rows.append(ChannelRow(
-                    id: row[0], name: row[1], logoURL: row[2], groupTitle: row[3],
-                    streamURL: row[4], guideRef: row[5], isFavourite: row[6]))
+                rows.append(Self.channelRow(row, from: 0))
             }
             return rows
         }
