@@ -80,7 +80,8 @@ typealias ChannelSection = TunerCore.Section
 
     /// The stats overlay's numbers. Held apart from the model so that only the overlay watches them.
     let statsReadout = StatsReadout()
-    /// ⌘I. Readings are taken only while it is on, on the supervisor's own tick.
+    /// ⌘I. Readings are taken only while it is on and the window is on screen: one after each of the
+    /// supervisor's own ticks, and one when a command changes the playback.
     private(set) var showsStats = false
 
     private var currentSection: ChannelSection = .recents
@@ -167,7 +168,7 @@ typealias ChannelSection = TunerCore.Section
         playingChannel = channel
         reloadUpNext()
         supervisor.play(streamURL: channel.streamURL)
-        if showsStats { refreshStats() }
+        refreshStatsIfSeen()
         let store = self.store
         Task.detached(priority: .utility) {
             try? store.recordWatched(streamURL: channel.streamURL, name: channel.name, at: Date())
@@ -180,12 +181,13 @@ typealias ChannelSection = TunerCore.Section
         playingChannel = nil
         upNextLoad?.cancel()
         upNext = []
-        if showsStats { refreshStats() }
+        refreshStatsIfSeen()
     }
 
     /// "Try Again" on the unavailable state.
     func retry() {
         supervisor.retry()
+        refreshStatsIfSeen()
     }
 
     /// Plays Recents entry `index` (0-based, newest first), as the store orders them.
@@ -223,11 +225,12 @@ typealias ChannelSection = TunerCore.Section
     }
 
     /// The supervisor needs a tick every second whenever it is not idle, `.unavailable` included (it
-    /// notices a wake from sleep through them). While idle there is no timer at all.
+    /// notices a wake from sleep through them). While idle there is no timer at all. The stats are
+    /// read once a tick, after it, and by each command that changes the status (`play`, `stop`,
+    /// `retry`), not here, so a tick that changes the status is not read twice.
     private func statusChanged(_ newStatus: PlaybackSupervisor.Status) {
         status = newStatus
         updateActivity(for: newStatus)
-        if showsStats { refreshStats() }
         if newStatus == .idle {
             ticker?.invalidate()
             ticker = nil
@@ -236,7 +239,7 @@ typealias ChannelSection = TunerCore.Section
                 MainActor.assumeIsolated {
                     guard let self else { return }
                     self.supervisor.tick()
-                    if self.showsStats { self.refreshStats() }
+                    self.refreshStatsIfSeen()
                 }
             }
             timer.tolerance = 0.2
@@ -264,7 +267,13 @@ typealias ChannelSection = TunerCore.Section
 
     func toggleStats() {
         showsStats.toggle()
-        if showsStats { refreshStats() }
+        refreshStatsIfSeen()
+    }
+
+    /// Takes a reading only when it can be seen: the overlay on, in a window on screen. A window that
+    /// comes back on screen takes one at once (`windowVisibilityChanged`).
+    private func refreshStatsIfSeen() {
+        if showsStats, isWindowVisible { refreshStats() }
     }
 
     /// Only the host of the channel's address is ever read out of it.
@@ -351,6 +360,7 @@ typealias ChannelSection = TunerCore.Section
         guard visible else { return }
         if Self.minute(of: Date()) != Self.minute(of: nowPlayingAt) { reloadForNewMinute() }
         scheduleMinuteTimer()
+        refreshStatsIfSeen()  // none were read while it was off screen
     }
 
     /// One-shot, set from the wall clock each time, so it stays on the boundary after a sleep.
