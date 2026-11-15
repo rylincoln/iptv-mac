@@ -527,7 +527,7 @@ typealias ChannelSection = TunerCore.Section
         showsChannelList.toggle()
     }
 
-    private func showChannelList() {
+    func showChannelList() {
         if !showsChannelList { showsChannelList = true }
     }
 
