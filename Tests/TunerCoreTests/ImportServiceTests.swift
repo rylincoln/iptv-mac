@@ -1,7 +1,6 @@
 import Foundation
 import Synchronization
 import Testing
-import zlib
 @testable import TunerCore
 
 // MARK: - Stub transport
@@ -10,6 +9,8 @@ private struct StubResponse: Sendable {
     var status = 200
     var headers: [String: String] = [:]
     var body = Data()
+    /// Answers 302 with this `Location`, and the session follows it as it would a real server's.
+    var redirect: URL?
 }
 
 /// Routes by URL path, so parallel tests with distinct paths never interfere.
@@ -28,6 +29,13 @@ private final class StubProtocol: URLProtocol {
     override func startLoading() {
         let handler = Self.routes.withLock { $0[request.url?.path ?? ""] }
         let stub = handler?(request) ?? StubResponse(status: 404)
+        if let target = stub.redirect, let url = request.url,
+           let response = HTTPURLResponse(
+               url: url, statusCode: 302, httpVersion: "HTTP/1.1",
+               headerFields: ["Location": target.absoluteString]) {
+            client?.urlProtocol(self, wasRedirectedTo: URLRequest(url: target), redirectResponse: response)
+            return
+        }
         let response = HTTPURLResponse(
             url: request.url!, statusCode: stub.status, httpVersion: "HTTP/1.1", headerFields: stub.headers)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
@@ -76,26 +84,7 @@ private func guideXML(channel: String = "one.example", title: String = "Evening 
         """
 }
 
-private func gzip(_ data: Data) -> Data {
-    var stream = z_stream()
-    deflateInit2_(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 16 + MAX_WBITS, 8, Z_DEFAULT_STRATEGY,
-                  ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size))
-    defer { deflateEnd(&stream) }
-    var input = [UInt8](data)
-    var output = [UInt8](repeating: 0, count: Int(deflateBound(&stream, UInt(input.count))) + 64)
-    var written = 0
-    input.withUnsafeMutableBufferPointer { inBuf in
-        output.withUnsafeMutableBufferPointer { outBuf in
-            stream.next_in = inBuf.baseAddress
-            stream.avail_in = UInt32(inBuf.count)
-            stream.next_out = outBuf.baseAddress
-            stream.avail_out = UInt32(outBuf.count)
-            deflate(&stream, Z_FINISH)
-            written = outBuf.count - Int(stream.avail_out)
-        }
-    }
-    return Data(output[0..<written])
-}
+private func gzip(_ data: Data) -> Data { TestGzip.compress(data) }
 
 private func withTempFile<T>(_ data: Data, _ body: (String) async throws -> T) async throws -> T {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("import-test-\(UUID().uuidString)")
@@ -294,9 +283,6 @@ private func expectGuideInStore(_ store: Store) throws {
         let cases: [(String, @Sendable (URLRequest) -> StubResponse)] = [
             ("/secret-500", { _ in StubResponse(status: 500) }),
             ("/secret-html", { _ in StubResponse(body: Data("<html></html>".utf8)) }),
-            ("/secret-redirect", { _ in
-                StubResponse(status: 302, headers: ["Location": "https://example.invalid/moved?token=SECRET"])
-            }),
         ]
         for (path, handler) in cases {
             StubProtocol.route(path, handler)
@@ -307,6 +293,137 @@ private func expectGuideInStore(_ store: Store) throws {
             let error = try #require(try source(store, id).lastError)
             #expect(!error.contains("SECRET"))
             #expect(!error.contains("example.invalid"))
+        }
+    }
+
+    /// A redirect is followed, and neither its `Location` nor anything of either address reaches the
+    /// recorded error or the thrown one.
+    @Test func aFollowedRedirectLeavesNoAddressInAnyText() async throws {
+        let store = try Store.inMemory()
+        let reached = Mutex(false)
+        let target = try #require(URL(string: "https://example.invalid/redirect-target?token=SECRET"))
+        StubProtocol.route("/redirect-target") { _ in
+            reached.withLock { $0 = true }
+            return StubResponse(status: 500)
+        }
+        StubProtocol.route("/secret-redirect") { _ in StubResponse(redirect: target) }
+        let id = try store.addSource(kind: .playlist, location: "https://example.invalid/secret-redirect?token=SECRET")
+        var thrown: Error?
+        do { _ = try await service(store, session: stubSession()).importPlaylist(sourceID: id) } catch { thrown = error }
+        #expect(reached.withLock { $0 })  // the redirect was really followed
+        let error = try #require(thrown)
+        #expect(error as? ImportError == .http(status: 500))
+        let recorded = try #require(try source(store, id).lastError)
+        for text in [recorded, String(describing: error), String(reflecting: error), error.localizedDescription] {
+            for secret in ["SECRET", "example.invalid", "redirect", "token"] {
+                #expect(!text.contains(secret), "\(text)")
+            }
+        }
+    }
+
+    /// What is recorded is what was stored: a programme that ended over a day ago is not stored, and one
+    /// for a channel the guide never declared is counted as skipped.
+    @Test func guideRecordsWhatWasStored() async throws {
+        let store = try Store.inMemory()
+        let start = xmltvDate(fixedNow), stop = xmltvDate(fixedNow.addingTimeInterval(3600))
+        let oldStart = xmltvDate(fixedNow.addingTimeInterval(-30 * 3600))
+        let oldStop = xmltvDate(fixedNow.addingTimeInterval(-29 * 3600))
+        let xml = """
+            <tv>
+              <channel id="one.example"><display-name>One</display-name></channel>
+              <programme start="\(start)" stop="\(stop)" channel="one.example"><title>Evening News</title></programme>
+              <programme start="\(oldStart)" stop="\(oldStop)" channel="one.example"><title>Yesterday</title></programme>
+              <programme start="\(start)" stop="\(stop)" channel="ghost.example"><title>Ghost</title></programme>
+              <programme start="\(start)" channel="one.example"><title>No stop</title></programme>
+            </tv>
+            """
+        try await withTempFile(Data(xml.utf8)) { path in
+            let id = try store.addSource(kind: .guide, location: path)
+            #expect(try await service(store).importGuide(sourceID: id) == .imported(items: 1, skipped: 2))
+            let row = try source(store, id)
+            #expect(row.itemCount == 1)
+            #expect(row.skippedCount == 2)
+        }
+        try expectGuideInStore(store)
+    }
+
+    @Test func guideThatInflatesPastTheLimitIsRefusedAndDeleted() async throws {
+        let folder = try emptyFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = try Store.inMemory()
+        let xml = Data(guideXML().utf8)
+        try await withTempFile(gzip(xml)) { path in
+            let id = try store.addSource(kind: .guide, location: path)
+            try store.replaceGuide(sourceID: id, now: fixedNow) { writer in
+                try writer.add(ParsedGuideChannel(id: "old", displayNames: ["Old"]))
+            }
+            let limited = ImportService(
+                store: store, now: { fixedNow }, temporaryDirectory: folder, decompressedLimit: Int64(xml.count) - 1)
+            await #expect(throws: ImportError.tooLarge) { try await limited.importGuide(sourceID: id) }
+            #expect(try source(store, id).lastError == "Guide too large")
+            #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty)
+            // The old guide stays.
+            try store.replaceChannels(sourceID: id, with: [
+                ParsedChannel(name: "Old", tvgID: "old", streamURL: "http://example.invalid/old"),
+            ])
+            #expect(try store.channels(in: .all, at: fixedNow).first?.guideRef != nil)
+
+            // Exactly at the limit is fine.
+            let exact = ImportService(
+                store: store, now: { fixedNow }, temporaryDirectory: folder, decompressedLimit: Int64(xml.count))
+            #expect(try await exact.importGuide(sourceID: id) == .imported(items: 1, skipped: 1))
+        }
+    }
+
+    /// The decompressed guide cannot be written (here its folder is missing; a full disk is the same).
+    @Test func guideThatCannotBeWrittenOutSaysSo() async throws {
+        let missing = FileManager.default.temporaryDirectory
+            .appendingPathComponent("import-missing-\(UUID().uuidString)", isDirectory: true)
+        let store = try Store.inMemory()
+        try await withTempFile(gzip(Data(guideXML().utf8))) { path in
+            let id = try store.addSource(kind: .guide, location: path)
+            let importer = ImportService(store: store, now: { fixedNow }, temporaryDirectory: missing)
+            await #expect(throws: ImportError.cannotWrite) { try await importer.importGuide(sourceID: id) }
+            #expect(try source(store, id).lastError == "Could not write to disk")
+        }
+    }
+
+    @Test func cancelledImportKeepsTheOldDataAndLeavesNoFile() async throws {
+        let folder = try emptyFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = try Store.inMemory()
+        let importer = ImportService(store: store, now: { fixedNow }, temporaryDirectory: folder)
+
+        try await withTempFile(Data(playlistText.utf8)) { path in
+            let id = try store.addSource(kind: .playlist, location: path)
+            try store.replaceChannels(sourceID: id, with: [ParsedChannel(name: "Old", streamURL: "http://example.invalid/old")])
+            let task = Task {
+                withUnsafeCurrentTask { $0?.cancel() }
+                return try await importer.importPlaylist(sourceID: id)
+            }
+            await #expect(throws: CancellationError.self) { try await task.value }
+            #expect(try store.channels(in: .all, at: fixedNow).map(\.name) == ["Old"])
+            #expect(try source(store, id).lastRefreshAt == nil)
+        }
+
+        let guideStore = try Store.inMemory()
+        let guideImporter = ImportService(store: guideStore, now: { fixedNow }, temporaryDirectory: folder)
+        try await withTempFile(gzip(Data(guideXML(title: "New").utf8))) { path in
+            let id = try guideStore.addSource(kind: .guide, location: path)
+            try guideStore.replaceGuide(sourceID: id, now: fixedNow) { writer in
+                try writer.add(ParsedGuideChannel(id: "one.example", displayNames: ["One"]))
+                try writer.add(ParsedProgramme(
+                    channelID: "one.example", start: fixedNow, stop: fixedNow.addingTimeInterval(3600),
+                    title: "Evening News"))
+            }
+            let task = Task {
+                withUnsafeCurrentTask { $0?.cancel() }
+                return try await guideImporter.importGuide(sourceID: id)
+            }
+            await #expect(throws: CancellationError.self) { try await task.value }
+            try expectGuideInStore(guideStore)  // still the old programme
+            #expect(try source(guideStore, id).lastRefreshAt == nil)
+            #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty)
         }
     }
 

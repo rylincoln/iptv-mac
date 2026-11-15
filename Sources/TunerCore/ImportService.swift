@@ -11,6 +11,10 @@ public enum ImportError: Error, Equatable {
     case rateLimited(until: Date)
     case notAPlaylist
     case notAGuide
+    /// A gzipped guide inflated past `Gunzip.defaultLimit`.
+    case tooLarge
+    /// The decompressed guide could not be written: the disk is full, say.
+    case cannotWrite
     case unreadable
 }
 
@@ -22,15 +26,27 @@ public struct ImportService: Sendable {
     private let now: @Sendable () -> Date
     /// Where a gzipped guide is decompressed to, for the length of its import.
     private let temporaryDirectory: URL
+    /// The most a gzipped guide may inflate to.
+    private let decompressedLimit: Int64
 
     public init(
         store: Store, session: URLSession = .shared, now: @escaping @Sendable () -> Date = Date.init,
         temporaryDirectory: URL = FileManager.default.temporaryDirectory
     ) {
+        self.init(
+            store: store, session: session, now: now, temporaryDirectory: temporaryDirectory,
+            decompressedLimit: Gunzip.defaultLimit)
+    }
+
+    init(
+        store: Store, session: URLSession = .shared, now: @escaping @Sendable () -> Date = Date.init,
+        temporaryDirectory: URL = FileManager.default.temporaryDirectory, decompressedLimit: Int64
+    ) {
         self.store = store
         self.session = session
         self.now = now
         self.temporaryDirectory = temporaryDirectory
+        self.decompressedLimit = decompressedLimit
     }
 
     /// Deletes guides left decompressed in `directory` by an import that never finished (the app quit
@@ -70,11 +86,16 @@ public struct ImportService: Sendable {
             if try Self.isGzip(file) {
                 let out = temporaryURL()
                 decompressed = out
-                do { try Gunzip.inflate(from: file, to: out) } catch { throw ImportError.notAGuide }
+                do {
+                    try Gunzip.inflate(from: file, to: out, limit: decompressedLimit)
+                } catch let failure as Gunzip.Failure {
+                    throw Self.importError(for: failure)
+                }
                 parseFile = out
+                try Task.checkCancellation()
             }
             var summary = XMLTVSummary(channels: 0, programmes: 0, skipped: 0)
-            try store.replaceGuide(sourceID: sourceID, now: now()) { writer in
+            let stored = try store.replaceGuide(sourceID: sourceID, now: now()) { writer in
                 var storeError: Error?
                 do {
                     summary = try XMLTVParser.parse(
@@ -88,9 +109,11 @@ public struct ImportService: Sendable {
                 // Thrown inside the transaction so the old guide stays.
                 if summary.channels == 0 && summary.programmes == 0 { throw ImportError.notAGuide }
             }
+            // What was stored: not programmes that had already ended a day ago. A programme whose
+            // channel the guide never declared is skipped, as is one the parser could not read.
             // A guide cut off part way keeps what parsed, but not its ETag: a later refresh must
             // download it whole, not be told it is unchanged.
-            return (summary.programmes, summary.skipped, summary.complete)
+            return (stored.programmes, summary.skipped + stored.programmesWithoutChannel, summary.complete)
         }
     }
 
@@ -109,6 +132,8 @@ public struct ImportService: Sendable {
         do {
             let fetched = try await fetch(source)
             defer { if let temp = fetched.temporary { try? FileManager.default.removeItem(at: temp) } }
+            // Cancelled while downloading: nothing is loaded, and the download is deleted.
+            try Task.checkCancellation()
             guard let file = fetched.file else {
                 try store.recordRefresh(
                     sourceID: sourceID, etag: source.etag, itemCount: source.itemCount,
@@ -191,8 +216,19 @@ public struct ImportService: Sendable {
         case .rateLimited: return "Provider is limiting requests"
         case .notAPlaylist: return "Not a playlist"
         case .notAGuide: return "Not a guide"
+        case .tooLarge: return "Guide too large"
+        case .cannotWrite: return "Could not write to disk"
         case .unreadable: return "Could not load"  // a missing file, or a failed download
         case nil: return "Import failed"
+        }
+    }
+
+    private static func importError(for failure: Gunzip.Failure) -> ImportError {
+        switch failure {
+        case .corrupt: return .notAGuide
+        case .tooLarge: return .tooLarge
+        case .cannotRead: return .unreadable
+        case .cannotWrite: return .cannotWrite
         }
     }
 
