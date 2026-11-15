@@ -266,33 +266,42 @@ typealias ChannelSection = TunerCore.Section
     // MARK: Favourites
 
     /// Shows the change at once, stars and the Favourites section alike, without waiting for the write,
-    /// which can sit behind an import; the Favourites section reloads once it is written.
+    /// which can sit behind an import; the Favourites section reloads once it is written. A write that
+    /// fails puts the change back, so the stars show what the store holds.
     func toggleFavourite(_ channel: ChannelRow) {
         let on = !channel.isFavourite
-        // Favourites are kept by stream URL, so every row with that URL changes.
-        for index in rows.indices where rows[index].streamURL == channel.streamURL {
+        showFavourite(on, streamURL: channel.streamURL)
+        let store = self.store
+        Task {
+            let written = await Task.detached(priority: .userInitiated) {
+                (try? store.setFavourite(on, streamURL: channel.streamURL, name: channel.name)) != nil
+            }.value
+            if !written { showFavourite(!on, streamURL: channel.streamURL) }
+            // Also brings back a row whose removal could not be written.
+            if currentSection == .favourites { reloadRows() }
+        }
+    }
+
+    /// Stars or unstars every row shown with the stream URL: the list, the playing channel and the
+    /// search results. Favourites are kept by stream URL, so every row with that URL changes. Unstarred
+    /// rows leave the Favourites section at once.
+    private func showFavourite(_ on: Bool, streamURL: String) {
+        for index in rows.indices where rows[index].streamURL == streamURL {
             rows[index].isFavourite = on
         }
-        if currentSection == .favourites, !on { rows.removeAll { $0.streamURL == channel.streamURL } }
-        if playingChannel?.streamURL == channel.streamURL { playingChannel?.isFavourite = on }
+        if currentSection == .favourites, !on { rows.removeAll { $0.streamURL == streamURL } }
+        if playingChannel?.streamURL == streamURL { playingChannel?.isFavourite = on }
         if var results = searchResults {
-            for index in results.channels.indices where results.channels[index].streamURL == channel.streamURL {
+            for index in results.channels.indices where results.channels[index].streamURL == streamURL {
                 results.channels[index].isFavourite = on
             }
-            for index in results.onNow.indices where results.onNow[index].channel.streamURL == channel.streamURL {
+            for index in results.onNow.indices where results.onNow[index].channel.streamURL == streamURL {
                 results.onNow[index].channel.isFavourite = on
             }
-            for index in results.later.indices where results.later[index].channel.streamURL == channel.streamURL {
+            for index in results.later.indices where results.later[index].channel.streamURL == streamURL {
                 results.later[index].channel.isFavourite = on
             }
             searchResults = results
-        }
-        let store = self.store
-        Task {
-            await Task.detached(priority: .userInitiated) {
-                try? store.setFavourite(on, streamURL: channel.streamURL, name: channel.name)
-            }.value
-            if currentSection == .favourites { reloadRows() }
         }
     }
 
