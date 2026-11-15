@@ -6,7 +6,7 @@ struct SidebarView: View {
     var focus: FocusState<PaneFocus?>.Binding
 
     var body: some View {
-        List(selection: selection) {
+        List(selection: selection(searching: model.showsSearchResults)) {
             Label("Recents", systemImage: "clock").tag(ChannelSection.recents)
             Label("Favourites", systemImage: "star").tag(ChannelSection.favourites)
             Label("Sports", systemImage: "sportscourt").tag(ChannelSection.sports)
@@ -24,14 +24,16 @@ struct SidebarView: View {
         }
     }
 
-    /// Choosing a section leaves the search, so the section's channels show.
-    private var selection: Binding<ChannelSection?> {
+    /// Choosing a section leaves the search, so the section's channels show. While results show, no
+    /// section is selected (they are not the section's), so a click on any section, the one under
+    /// the results included, leaves the search.
+    private func selection(searching: Bool) -> Binding<ChannelSection?> {
         Binding(
-            get: { model.section },
+            get: { searching ? nil : model.section },
             set: {
                 guard let section = $0 else { return }
                 model.searchText = ""
-                model.section = section
+                if section != model.section { model.section = section }
             })
     }
 }

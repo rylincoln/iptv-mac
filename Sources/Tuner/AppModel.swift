@@ -51,6 +51,9 @@ typealias ChannelSection = TunerCore.Section
     /// What `searchText` found, shown over the channel list. Nil when the text has no letters
     /// or digits to search for; empty lists when it has but nothing matches.
     private(set) var searchResults: SearchResults?
+    /// Whether results (or "No results") show. Changes only when a search starts or ends, so a view
+    /// that needs no more than this is not updated for every new set of results.
+    private(set) var showsSearchResults = false
     /// The highlighted result. The first row is selected whenever new results arrive.
     var selectedResultID: SearchResultID?
     /// Bumped each time a search's results are applied, even when they equal the ones showing; not by
@@ -448,6 +451,7 @@ typealias ChannelSection = TunerCore.Section
 
     private func apply(_ found: SearchResults, for text: String) {
         searchResults = found
+        if !showsSearchResults { showsSearchResults = true }
         resultsText = text
         selectedResultID = found.firstResultID
         resultsGeneration &+= 1
@@ -460,6 +464,7 @@ typealias ChannelSection = TunerCore.Section
     private func clearSearchResults() {
         resultsText = nil
         if searchResults != nil { searchResults = nil }
+        if showsSearchResults { showsSearchResults = false }
         if selectedResultID != nil { selectedResultID = nil }
         if chosenProgramme != nil { chosenProgramme = nil }
     }
