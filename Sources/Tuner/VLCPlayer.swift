@@ -28,6 +28,8 @@ import VLCKit
     private var generation = 0
     private var acceptingEvents = false
     private var lastEvent = EngineEvent.none
+    /// An Opening event was accepted for the current play call, so libVLC has made its input.
+    private var hasOpened = false
     private var positionMs: Int64 = 0
     private var sample = PlayerStats.zero      // counters at the previous reading
     private var sampledAt: TimeInterval = 0
@@ -69,6 +71,7 @@ import VLCKit
         if media != nil { engine?.stop() }
         media = nil
         lastEvent = .none
+        hasOpened = false
         positionMs = 0
         sample = .zero
         advancing = false
@@ -98,10 +101,13 @@ import VLCKit
     }
 
     var stats: PlayerStats {
-        // Until the first event of this play call the media has no input, and VLCKit then returns
-        // uninitialised memory as statistics. Even after it, the bitrate (a float, in kilobytes per
-        // millisecond) is sanitised, so the overlay's whole-number reading can never trap.
-        guard let media, lastEvent != .none else { return .zero }
+        // Until this play call's Opening event the media has no input, and VLCKit then returns
+        // uninitialised memory as statistics. Opening, not just any event: a late event of the
+        // previous stream is no proof. VLCKit 3.7 sends Opening first, within milliseconds of
+        // `play`, for live streams and failing ones alike. Even after it, the bitrate
+        // (a float, in kilobytes per millisecond) is sanitised, so the overlay's whole-number reading
+        // can never trap.
+        guard let media, hasOpened else { return .zero }
         let counters = media.statistics
         return PlayerStats(
             positionMs: positionMs,
@@ -139,7 +145,9 @@ import VLCKit
         guard acceptingEvents, let engine else { return }
         if lastEvent == .ended || lastEvent == .error { return }  // final for this play call
         switch engine.state {
-        case .opening: lastEvent = .opening
+        case .opening:
+            lastEvent = .opening
+            hasOpened = true
         case .buffering: lastEvent = .buffering
         case .playing, .esAdded, .paused: lastEvent = .running
         case .ended: lastEvent = .ended
