@@ -205,7 +205,7 @@ extension View {
             guard press.modifiers.isDisjoint(with: [.command, .control, .option]) else { return .ignored }
             model.searchText += press.characters
             focus.wrappedValue = .search
-            model.requestSearchField()
+            model.send(.searchFieldRequested)
             return .handled
         }
     }

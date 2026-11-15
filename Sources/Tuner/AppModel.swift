@@ -15,7 +15,7 @@ typealias ChannelSection = TunerCore.Section
         set {
             currentSection = newValue
             reloadRows()
-            showChannelList()
+            send(.sectionChosen)
         }
     }
     private(set) var rows: [ChannelRow] = []
@@ -47,7 +47,7 @@ typealias ChannelSection = TunerCore.Section
             guard newValue != currentSearchText else { return }
             currentSearchText = newValue
             scheduleSearch()
-            if !newValue.isEmpty { showChannelList() }
+            if !newValue.isEmpty { send(.searchTyped) }
         }
     }
     /// What `searchText` found, shown over the channel list. Nil when the text has no letters
@@ -66,16 +66,14 @@ typealias ChannelSection = TunerCore.Section
     /// A later programme picked from the results. The details pane shows it in place of the playing
     /// channel's programme until a channel is played or the search is cleared.
     private(set) var chosenProgramme: ProgrammeHit?
-    /// Bumped by `requestSearchField`; the window shows the search field and gives it the keyboard on
-    /// each change.
-    private(set) var searchFieldRequests = 0
-    /// Bumped by `requestVideoFullScreenToggle`; the window puts the video in or out of full screen on
-    /// each change.
-    private(set) var videoFullScreenRequests = 0
-    /// Whether the channel list (or the search results over it) shows over the video. It shows when
-    /// a section is chosen, a search is typed or asked for, and when playback is stopped; it is put
-    /// away when a channel is played, so the video is left alone. The window and ⌘L change it too.
-    var showsChannelList = true
+    /// What shows around the video: the channel list over it, the video full screen. Changed only
+    /// by `send`, which applies `WindowState`'s rules.
+    private(set) var window = WindowState()
+    var showsChannelList: Bool { window.showsChannelList }
+    var videoFullScreen: Bool { window.videoFullScreen }
+    /// Bumped when `send` leaves the window something to do; it takes them with `takeWindowOutcomes`.
+    private(set) var windowOutcomeCount = 0
+    @ObservationIgnored private var windowOutcomes: [WindowState.Outcome] = []
     private(set) var status: PlaybackSupervisor.Status = .idle
     /// "Importing…", "4,144 channels", or a short fixed error. Never a location.
     private(set) var importMessage: String?
@@ -193,7 +191,7 @@ typealias ChannelSection = TunerCore.Section
     /// entry asked for earlier and still being read is dropped: the last request wins.
     func play(_ channel: ChannelRow) {
         cancelRecentsPlay()
-        if showsChannelList { showsChannelList = false }
+        send(.played)
         if chosenProgramme != nil { chosenProgramme = nil }
         if playingChannel?.streamURL == channel.streamURL, status == .starting || status == .playing { return }
         if channel.guideRef != playingChannel?.guideRef { upNext = [] }  // never show another channel's
@@ -209,7 +207,7 @@ typealias ChannelSection = TunerCore.Section
 
     func stop() {
         cancelRecentsPlay()
-        showChannelList()
+        send(.stopped)
         supervisor.stop()
         playingChannel = nil
         upNextLoad?.cancel()
@@ -517,27 +515,26 @@ typealias ChannelSection = TunerCore.Section
         }
     }
 
-    /// ⌘⏎: the video alone, full screen, or back to the panes.
-    func requestVideoFullScreenToggle() {
-        videoFullScreenRequests &+= 1
+    // MARK: Window
+
+    /// Tells the window's state what happened. What it changes shows at once; anything more the
+    /// window must do (move the keyboard, show the search field) waits in `windowOutcomes`.
+    func send(_ event: WindowState.Event) {
+        var next = window
+        let outcome = next.handle(event, playing: playingChannel != nil)
+        if next != window { window = next }
+        if outcome != WindowState.Outcome() {
+            windowOutcomes.append(outcome)
+            windowOutcomeCount &+= 1
+        }
     }
 
-    /// ⌘L.
-    func toggleChannelList() {
-        showsChannelList.toggle()
-    }
-
-    func showChannelList() {
-        if !showsChannelList { showsChannelList = true }
+    func takeWindowOutcomes() -> [WindowState.Outcome] {
+        defer { windowOutcomes = [] }
+        return windowOutcomes
     }
 
     // MARK: Search
-
-    /// ⌘F, or a letter typed in a list.
-    func requestSearchField() {
-        showChannelList()
-        searchFieldRequests &+= 1
-    }
 
     /// Return in the search field: acts on the selected result. Pressed before the results for the
     /// text as typed are in, it acts on the first of those once they arrive, not on older results.

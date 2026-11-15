@@ -8,7 +8,6 @@ import TunerCore
 /// sampled from the video as it plays.
 struct PlayerPaneView: View {
     let model: AppModel
-    @Binding var isFullScreen: Bool
     var focus: FocusState<PaneFocus?>.Binding
     /// The height of the toolbar lying over the pane's top edge; none in full screen.
     let topInset: CGFloat
@@ -29,10 +28,10 @@ struct PlayerPaneView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
-            idle.hidesPointer = isFullScreen
+            idle.hidesPointer = model.videoFullScreen
             idle.start(over: model.videoView)
         }
-        .onChange(of: isFullScreen) { _, on in
+        .onChange(of: model.videoFullScreen) { _, on in
             idle.hidesPointer = on
             idle.pointerMoved()
         }
@@ -55,7 +54,7 @@ struct PlayerPaneView: View {
         .focused(focus, equals: .player)
         .onKeyPress(characters: CharacterSet(charactersIn: "fF"), phases: .down) { press in
             guard press.modifiers.isDisjoint(with: [.command, .control, .option]) else { return .ignored }
-            isFullScreen.toggle()
+            model.send(.toggleVideoFullScreen)
             return .handled
         }
     }
@@ -66,10 +65,10 @@ struct PlayerPaneView: View {
     private var clickLayer: some View {
         Color.clear
             .contentShape(Rectangle())
-            .onTapGesture(count: 2) { isFullScreen.toggle() }
+            .onTapGesture(count: 2) { model.send(.toggleVideoFullScreen) }
             .simultaneousGesture(
                 TapGesture().onEnded {
-                    if model.playingChannel != nil, model.showsChannelList { model.showsChannelList = false }
+                    model.send(.videoClicked)
                     focus.wrappedValue = .player
                 }
             )

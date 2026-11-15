@@ -34,7 +34,7 @@ struct SidebarView: View {
             set: {
                 guard let section = $0 else { return }
                 model.searchText = ""
-                model.showChannelList()
+                model.send(.sectionChosen)
                 if section != model.section { model.section = section }
             })
     }
@@ -70,7 +70,7 @@ private struct SearchField: View {
                 }
                 .onChange(of: focus.wrappedValue) { old, new in
                     if old == .search { textWhenLeft = model.searchText }
-                    if new == .search { model.showChannelList() }  // a click on the field brings the list back
+                    if new == .search { model.send(.searchFieldFocused) }  // a click on the field brings the list back
                     if new == .search, old != .search, model.searchText != textWhenLeft {
                         selection = TextSelection(insertionPoint: model.searchText.endIndex)
                     }

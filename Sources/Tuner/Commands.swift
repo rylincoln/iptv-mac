@@ -35,16 +35,16 @@ struct ChannelCommands: Commands {
 
     var body: some Commands {
         CommandGroup(after: .textEditing) {
-            Button("Find…") { model?.requestSearchField() }
+            Button("Find…") { model?.send(.searchFieldRequested) }
                 .keyboardShortcut("f", modifiers: .command)
                 .disabled(model == nil)
         }
         CommandGroup(before: .toolbar) {
-            Button("Video Full Screen") { model?.requestVideoFullScreenToggle() }
+            Button("Video Full Screen") { model?.send(.toggleVideoFullScreen) }
                 .keyboardShortcut(.return, modifiers: .command)
                 .disabled(model == nil)
             Button(model?.showsChannelList == false ? "Show Channel List" : "Hide Channel List") {
-                model?.toggleChannelList()
+                model?.send(.toggleChannelList)
             }
             .keyboardShortcut("l", modifiers: .command)
             .disabled(model == nil)

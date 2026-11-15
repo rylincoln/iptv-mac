@@ -12,11 +12,7 @@ enum PaneFocus: Hashable { case channelList, player, search, covered }
 struct MainWindow: View {
     let model: AppModel
     @FocusState private var focus: PaneFocus?
-    /// The player pane alone, filling the screen.
-    @State private var videoFullScreen = false
     @State private var columns = NavigationSplitViewVisibility.automatic
-    /// ⌘F in video full screen: the search field takes the keyboard once the panes are back.
-    @State private var searchFieldAfterFullScreen = false
     /// The columns before the search field showed a hidden sidebar; Escape puts them back. Forgotten
     /// when the owner shows or hides a column, when the search's results go without Escape (a section
     /// chosen, the field cleared), when the field loses the keyboard with nothing typed, and when the
@@ -39,43 +35,26 @@ struct MainWindow: View {
         .overlayPreferenceValue(PlayerPaneFrame.self) { anchor in
             GeometryReader { proxy in
                 let whole = CGRect(origin: .zero, size: proxy.size)
-                let frame = videoFullScreen ? whole : anchor.map { proxy[$0] } ?? whole
+                let frame = model.videoFullScreen ? whole : anchor.map { proxy[$0] } ?? whole
                 PlayerPaneView(
-                    model: model, isFullScreen: $videoFullScreen, focus: $focus,
+                    model: model, focus: $focus,
                     // What the toolbar covers of the pane, which the list and the corners keep clear of.
-                    topInset: videoFullScreen ? 0 : proxy.safeAreaInsets.top
+                    topInset: model.videoFullScreen ? 0 : proxy.safeAreaInsets.top
                 )
                 .frame(width: frame.width, height: frame.height)
                 .offset(x: frame.minX, y: frame.minY)
             }
             .ignoresSafeArea()
         }
-        .toolbar(videoFullScreen ? .hidden : .automatic, for: .windowToolbar)
+        .toolbar(model.videoFullScreen ? .hidden : .automatic, for: .windowToolbar)
         .toolbar(removing: model.showsChannelList ? nil : .title)
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)  // nothing drawn across the video
         .onExitCommand {
-            // One thing at a time, outermost last: the search, then the channel list (only while
-            // something plays, or the pane would be left blank), then full screen.
-            let searching = !model.searchText.isEmpty || focus == .search
-            if model.showsChannelList, model.playingChannel != nil, !searching || videoFullScreen {
-                model.showsChannelList = false
-            } else if videoFullScreen {
-                videoFullScreen = false
-            } else if searching {
-                // Leaves the search: the channel list, kept in the window under the results, shows
-                // again with its section and selection. It is uncovered in this update, and can take
-                // focus only once that is done; a sidebar the search showed is hidden again with it.
-                model.searchText = ""
-                let restore = columnsBeforeSearch
-                columnsBeforeSearch = nil
-                Task {
-                    focus = .channelList
-                    if let restore { columns = restore }
-                }
-            }
+            model.send(.escape(searching: !model.searchText.isEmpty || focus == .search))
         }
-        .onChange(of: model.searchFieldRequests) { showSearchField() }
-        .onChange(of: model.videoFullScreenRequests) { videoFullScreen.toggle() }
+        .onChange(of: model.windowOutcomeCount) {
+            for outcome in model.takeWindowOutcomes() { carryOut(outcome) }
+        }
         .onChange(of: columns) { _, now in
             if now != .all { columnsBeforeSearch = nil }  // the owner's own choice stands
         }
@@ -92,36 +71,11 @@ struct MainWindow: View {
             // keyboard.
             if old == .search, now != .search, model.searchText.isEmpty { columnsBeforeSearch = nil }
         }
-        .onChange(of: model.showsChannelList) { _, shown in
-            // Shown: the keyboard goes to the list, unless the search field has or is about to get it.
-            // Put away: to the video. On the next turn, once the list is uncovered or covered.
-            Task {
-                if !shown {
-                    focus = .player
-                } else if focus != .search {
-                    focus = .channelList
-                }
-            }
-        }
-        .onChange(of: videoFullScreen) { _, on in
-            if on {
-                // The video alone, if there is one.
-                if model.playingChannel != nil { model.showsChannelList = false }
-                focus = model.showsChannelList ? .channelList : .player
-            } else {
-                if searchFieldAfterFullScreen {
-                    searchFieldAfterFullScreen = false
-                    showSearchField()
-                } else {
-                    focus = model.showsChannelList ? .channelList : .player
-                }
-            }
-        }
         .background {
             WindowBridge(
-                videoFullScreen: videoFullScreen,
+                videoFullScreen: model.videoFullScreen,
                 visibilityChanged: { model.windowVisibilityChanged($0) },
-                leftFullScreen: { videoFullScreen = false })
+                leftFullScreen: { model.send(.windowLeftFullScreen) })
         }
         .navigationTitle(title)
         .navigationSubtitle(model.importMessage ?? "")
@@ -138,14 +92,36 @@ struct MainWindow: View {
         .frame(minWidth: 900, minHeight: 500)
     }
 
-    /// ⌘F, or letters typed in a list: leaves video full screen first, and shows the sidebar if it is
+    /// What `WindowState` leaves the window to do after an event.
+    private func carryOut(_ outcome: WindowState.Outcome) {
+        if outcome.leaveSearch {
+            // The channel list, kept in the window under the results, shows again with its section
+            // and selection. It is uncovered in this update, and can take focus only once that is
+            // done; a sidebar the search showed is hidden again with it.
+            model.searchText = ""
+            let restore = columnsBeforeSearch
+            columnsBeforeSearch = nil
+            Task {
+                focus = .channelList
+                if let restore { columns = restore }
+            }
+        }
+        if outcome.showSearchField { showSearchField() }
+        if let target = outcome.focus {
+            // On the next turn, once the list is uncovered or covered.
+            Task {
+                switch target {
+                case .player: focus = .player
+                case .channelList: focus = .channelList
+                case .channelListUnlessSearchField: if focus != .search { focus = .channelList }
+                }
+            }
+        }
+    }
+
+    /// ⌘F, or letters typed in a list (full screen is already left): shows the sidebar if it is
     /// hidden. The field may come back in this update, and can take focus only once it is there.
     private func showSearchField() {
-        if videoFullScreen {
-            searchFieldAfterFullScreen = true
-            videoFullScreen = false
-            return
-        }
         if columns == .detailOnly || columns == .doubleColumn {
             columnsBeforeSearch = columns
             columns = .all
