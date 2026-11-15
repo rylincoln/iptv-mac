@@ -156,7 +156,7 @@ public struct ImportService: Sendable {
         case .http(let status): return "HTTP \(status)"
         case .notAPlaylist: return "Not a playlist"
         case .notAGuide: return "Not a guide"
-        case .unreadable: return "Could not read file"
+        case .unreadable: return "Could not load"  // a missing file, or a failed download
         case nil: return "Import failed"
         }
     }

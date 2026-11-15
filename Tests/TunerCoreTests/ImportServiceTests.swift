@@ -308,6 +308,6 @@ private func expectGuideInStore(_ store: Store) throws {
         await #expect(throws: ImportError.unreadable) {
             try await service(store).importPlaylist(sourceID: id)
         }
-        #expect(try source(store, id).lastError == "Could not read file")
+        #expect(try source(store, id).lastError == "Could not load")
     }
 }
