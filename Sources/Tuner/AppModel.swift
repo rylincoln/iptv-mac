@@ -134,7 +134,7 @@ typealias ChannelSection = TunerCore.Section
     private static let searchPause: Duration = .milliseconds(80)
 
     /// The reads that show stars: the channel list, the search results, and one stream's star, read
-    /// back after its write failed.
+    /// back once its writes have ended.
     private enum StarRead: Hashable, Sendable { case rows, search, favourite(streamURL: String) }
 
     init(store: Store, message: String? = nil) {
@@ -317,35 +317,36 @@ typealias ChannelSection = TunerCore.Section
 
     /// Shows the change at once, stars and the Favourites section alike, without waiting for the write,
     /// which can sit behind an import; until every such write has ended, reads of the store wait or are
-    /// made again (`favouriteWrites`). The star of a write that fails is read back from the store once
-    /// every write has ended, so the stars show what the store holds. Not simply put back: when two
-    /// writes for a stream both fail, putting each back leaves the star the wrong way.
+    /// made again (`favouriteWrites`). Every star changed is read back from the store once every write
+    /// has ended, written or not, so the stars end as the store holds them: whatever order queued
+    /// writes for one stream ran in, and when a write failed (not simply put back: when two writes for
+    /// a stream both fail, putting each back leaves the star the wrong way).
     func toggleFavourite(_ channel: ChannelRow) {
         let on = !channel.isFavourite
         showFavourite(on, streamURL: channel.streamURL)
         favouriteWrites.begin()
+        favouriteWrites.hold(.favourite(streamURL: channel.streamURL))
         let store = self.store
         Task {
-            let written = await Task.detached(priority: .userInitiated) {
-                (try? store.setFavourite(on, streamURL: channel.streamURL, name: channel.name)) != nil
+            await Task.detached(priority: .userInitiated) {
+                _ = try? store.setFavourite(on, streamURL: channel.streamURL, name: channel.name)
             }.value
-            if !written { favouriteWrites.hold(.favourite(streamURL: channel.streamURL)) }
             if let reads = favouriteWrites.end() { readAfterFavouriteWrites(reads) }
         }
     }
 
-    /// Every favourite write has ended. The reads that may have missed one are made again, stars whose
-    /// writes failed are read back, and the Favourites section is read again while it is the section
-    /// chosen: a channel starred elsewhere shows there only once read, and a row whose removal could
-    /// not be written comes back.
+    /// Every favourite write has ended. The reads that may have missed one are made again, the stars
+    /// changed are read back, and the Favourites section is read again while it is the section chosen:
+    /// a channel starred elsewhere shows there only once read, and a row whose removal could not be
+    /// written comes back.
     private func readAfterFavouriteWrites(_ reads: Set<StarRead>) {
         if reads.contains(.rows) || currentSection == .favourites { reloadRows() }
         if reads.contains(.search) { refreshSearchResults() }
-        let unwritten = reads.compactMap { read -> String? in
+        let changed = reads.compactMap { read -> String? in
             if case .favourite(let streamURL) = read { return streamURL }
             return nil
         }
-        if !unwritten.isEmpty { readBackFavourites(of: unwritten) }
+        if !changed.isEmpty { readBackFavourites(of: changed) }
     }
 
     /// Shows each stream's star as the store has it, read off the main thread. A star changed again
@@ -371,28 +372,41 @@ typealias ChannelSection = TunerCore.Section
     /// search results. Favourites are kept by stream URL, so every row with that URL changes. Unstarred
     /// rows leave the Favourites section at once; a selection among them moves to the row that takes
     /// its place, so ⌘D and Return still act on a highlighted row.
+    /// Only what differs is assigned, so a star read back unchanged updates nothing on screen.
     private func showFavourite(_ on: Bool, streamURL: String) {
-        for index in rows.indices where rows[index].streamURL == streamURL {
-            rows[index].isFavourite = on
-        }
+        let isStream: (ChannelRow) -> Bool = { $0.streamURL == streamURL }
         if currentSection == .favourites, !on {
-            let isGone: (ChannelRow) -> Bool = { $0.streamURL == streamURL }
-            let selection = ListSelection.afterRemoving(from: rows, where: isGone, selected: selectedChannelID)
-            rows.removeAll(where: isGone)
-            if selection != selectedChannelID { selectedChannelID = selection }
+            if rows.contains(where: isStream) {
+                let selection = ListSelection.afterRemoving(from: rows, where: isStream, selected: selectedChannelID)
+                rows.removeAll(where: isStream)
+                if selection != selectedChannelID { selectedChannelID = selection }
+            }
+        } else {
+            for index in rows.indices where isStream(rows[index]) && rows[index].isFavourite != on {
+                rows[index].isFavourite = on
+            }
         }
-        if playingChannel?.streamURL == streamURL { playingChannel?.isFavourite = on }
+        if let playing = playingChannel, isStream(playing), playing.isFavourite != on {
+            playingChannel?.isFavourite = on
+        }
         if var results = searchResults {
-            for index in results.channels.indices where results.channels[index].streamURL == streamURL {
+            var changed = false
+            for index in results.channels.indices
+            where isStream(results.channels[index]) && results.channels[index].isFavourite != on {
                 results.channels[index].isFavourite = on
+                changed = true
             }
-            for index in results.onNow.indices where results.onNow[index].channel.streamURL == streamURL {
+            for index in results.onNow.indices
+            where isStream(results.onNow[index].channel) && results.onNow[index].channel.isFavourite != on {
                 results.onNow[index].channel.isFavourite = on
+                changed = true
             }
-            for index in results.later.indices where results.later[index].channel.streamURL == streamURL {
+            for index in results.later.indices
+            where isStream(results.later[index].channel) && results.later[index].channel.isFavourite != on {
                 results.later[index].channel.isFavourite = on
+                changed = true
             }
-            searchResults = results
+            if changed { searchResults = results }
         }
     }
 
