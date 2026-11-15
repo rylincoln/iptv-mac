@@ -32,7 +32,9 @@ final class WindowBridgeView: NSView {
     private var inTransition = false
     private var transitionBegan = false
     /// When the transition began. AppKit tells a failed transition only to the window's delegate, which
-    /// is SwiftUI's, so one that never ends stops holding requests back after `transitionLimit`.
+    /// is SwiftUI's, so this view would wait for its end for ever. After `transitionLimit` it stops
+    /// waiting, but nothing wakes it then: a request held meanwhile is acted on only when the next
+    /// request or full-screen notification comes.
     private var transitionStartedAt: TimeInterval = 0
     private static let transitionLimit: TimeInterval = 5
 
@@ -78,9 +80,12 @@ final class WindowBridgeView: NSView {
         DispatchQueue.main.async { [weak self] in self?.matchRequest() }
     }
 
-    /// Takes the window into or out of full screen as last asked, unless a transition is under way: its
-    /// end calls this again. However quickly requests come, the window ends full screen with the video
-    /// alone, or as it was with the panes.
+    /// Takes the window into or out of full screen as last asked, unless a transition is under way. The
+    /// end of going in calls this again, so a request to leave made meanwhile is acted on; the end of
+    /// leaving drops a request to go back in and ends the video's full screen with the window's. So
+    /// however quickly requests come, a window whose transitions end finishes full screen with the
+    /// video alone, or as it was with the panes. A transition that never ends holds the last request
+    /// back (see `transitionStartedAt`).
     private func matchRequest() {
         let now = ProcessInfo.processInfo.systemUptime
         if inTransition, now - transitionStartedAt < Self.transitionLimit { return }
