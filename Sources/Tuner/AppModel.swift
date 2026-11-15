@@ -54,10 +54,12 @@ typealias ChannelSection = TunerCore.Section
     /// Whether results (or "No results") show. Changes only when a search starts or ends, so a view
     /// that needs no more than this is not updated for every new set of results.
     private(set) var showsSearchResults = false
-    /// The highlighted result. The first row is selected whenever new results arrive.
+    /// The highlighted result. The first row is selected whenever a search's results arrive; the
+    /// minute's refresh of them keeps the selection where it can.
     var selectedResultID: SearchResultID?
     /// Bumped each time a search's results are applied, even when they equal the ones showing; not by
-    /// changes to the results shown, such as a favourite. The results list scrolls to its top on it.
+    /// changes to the results shown, such as a favourite or the minute's refresh. The results list
+    /// scrolls to its top on it.
     private(set) var resultsGeneration = 0
     /// A later programme picked from the results. The details pane shows it in place of the playing
     /// channel's programme until a channel is played or the search is cleared.
@@ -371,11 +373,13 @@ typealias ChannelSection = TunerCore.Section
     }
 
     /// What depends on the time, read again on the minute while the window is visible: what is on now,
-    /// and the Sports section's channels when it is the section chosen (it lists the channels with a
-    /// sport on now). A read that finds what is shown changes nothing on screen.
+    /// the Sports section's channels when it is the section chosen (it lists the channels with a sport
+    /// on now), and the search results while they show. A read that finds what is shown changes
+    /// nothing on screen.
     private func reloadForNewMinute() {
         reloadNowPlaying()
         if currentSection == .sports { reloadRows() }
+        refreshSearchResults()
     }
 
     /// A failed read keeps what is shown.
@@ -481,6 +485,33 @@ typealias ChannelSection = TunerCore.Section
             if searchQuery == query { searchQuery = nil }  // finished: nothing to wait for, nothing kept
             guard !Task.isCancelled, text == currentSearchText, let found else { return }  // a failed read keeps what is shown
             apply(found, for: text)
+        }
+    }
+
+    /// On the minute: the results showing are found again for their text, so a programme that has
+    /// ended leaves On now and one that has begun moves up from Later. Results equal to those showing
+    /// change nothing. Others replace them with the selection kept where it can be
+    /// (`SearchResults.selection(following:)`) and the list left where it is scrolled. A search for
+    /// newly typed text cancels this, and as with every search, a store query never starts while
+    /// another runs.
+    private func refreshSearchResults() {
+        guard searchResults != nil, let text = resultsText, text == currentSearchText else { return }
+        searchLoad?.cancel()
+        let store = self.store
+        searchLoad = Task {
+            _ = await searchQuery?.value
+            guard !Task.isCancelled else { return }
+            let query = Task.detached(priority: .utility) { try? store.search(text, at: Date()) }
+            searchQuery = query
+            let found = await query.value
+            if searchQuery == query { searchQuery = nil }
+            // A failed read keeps what is shown.
+            guard !Task.isCancelled, text == currentSearchText, text == resultsText, let found,
+                  found != searchResults
+            else { return }
+            searchResults = found
+            let selection = found.selection(following: selectedResultID)
+            if selection != selectedResultID { selectedResultID = selection }
         }
     }
 
