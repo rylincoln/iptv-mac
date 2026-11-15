@@ -526,7 +526,7 @@ typealias ChannelSection = TunerCore.Section
     /// On the minute: the results showing are found again for their text, so a programme that has
     /// ended leaves On now and one that has begun moves up from Later. Results equal to those showing
     /// change nothing. Others replace them with the selection kept where it can be
-    /// (`SearchResults.selection(following:)`) and the list left where it is scrolled. A search for
+    /// (`SearchResults.selection(following:in:)`) and the list left where it is scrolled. A search for
     /// newly typed text cancels this, and as with every search, a store query never starts while
     /// another runs.
     private func refreshSearchResults() {
@@ -543,9 +543,9 @@ typealias ChannelSection = TunerCore.Section
             if searchQuery == query { searchQuery = nil }
             // A failed read keeps what is shown.
             guard !Task.isCancelled, text == currentSearchText, text == resultsText, let found else { return }
-            if found != searchResults {
+            if let old = searchResults, found != old {
                 searchResults = found
-                let selection = found.selection(following: selectedResultID)
+                let selection = found.selection(following: selectedResultID, in: old)
                 if selection != selectedResultID { selectedResultID = selection }
             }
             if favouriteWrites.check(.search, since: ticket) == .readAgainNow { refreshSearchResults() }
