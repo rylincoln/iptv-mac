@@ -97,6 +97,8 @@ typealias ChannelSection = TunerCore.Section
     @ObservationIgnored private var rowsSection: ChannelSection?
     @ObservationIgnored private var nowPlayingLoad: Task<Void, Never>?
     @ObservationIgnored private var upNextLoad: Task<Void, Never>?
+    /// A channel asked for by its place in Recents (⌘1…⌘9, ⌘[), while Recents is read.
+    @ObservationIgnored private var recentsPlay: Task<Void, Never>?
     /// Fires once, on the next minute boundary; exists only while the window is visible.
     @ObservationIgnored private var minuteTimer: Timer?
     @ObservationIgnored private var isWindowVisible = false
@@ -153,8 +155,10 @@ typealias ChannelSection = TunerCore.Section
     // MARK: Playback
 
     /// Plays through the supervisor and records the channel in Recents. Asking for the channel that is
-    /// already starting or playing does nothing, beyond the details pane going back to it.
+    /// already starting or playing does nothing, beyond the details pane going back to it. A Recents
+    /// entry asked for earlier and still being read is dropped: the last request wins.
     func play(_ channel: ChannelRow) {
+        cancelRecentsPlay()
         if chosenProgramme != nil { chosenProgramme = nil }
         if playingChannel?.streamURL == channel.streamURL, status == .starting || status == .playing { return }
         if channel.guideRef != playingChannel?.guideRef { upNext = [] }  // never show another channel's
@@ -169,6 +173,7 @@ typealias ChannelSection = TunerCore.Section
     }
 
     func stop() {
+        cancelRecentsPlay()
         supervisor.stop()
         playingChannel = nil
         upNextLoad?.cancel()
@@ -195,14 +200,24 @@ typealias ChannelSection = TunerCore.Section
         playFromRecents { recents in recents.first { $0.streamURL != current } }
     }
 
+    /// Reads Recents off the main thread, then plays what `pick` chooses from them, unless a later
+    /// request (another of these, a channel played, Stop) came first.
     private func playFromRecents(_ pick: @escaping ([ChannelRow]) -> ChannelRow?) {
+        cancelRecentsPlay()
         let store = self.store
-        Task {
+        recentsPlay = Task {
             let recents = await Task.detached(priority: .userInitiated) {
                 (try? store.channels(in: .recents, at: Date())) ?? []
             }.value
+            guard !Task.isCancelled else { return }
+            recentsPlay = nil  // still the latest request, and finished
             if let channel = pick(recents) { play(channel) }
         }
+    }
+
+    private func cancelRecentsPlay() {
+        recentsPlay?.cancel()
+        recentsPlay = nil
     }
 
     /// The supervisor needs a tick every second whenever it is not idle, `.unavailable` included (it
