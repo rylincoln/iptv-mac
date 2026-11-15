@@ -98,6 +98,9 @@ typealias ChannelSection = TunerCore.Section
     @ObservationIgnored private var rowsLoad: Task<Void, Never>?
     /// The section `rows` were read for; nil until the first read is applied.
     @ObservationIgnored private var rowsSection: ChannelSection?
+    /// The time `rows` were read for. The Sports section depends on it, and is not read on the minute
+    /// while search results cover it; it is read when they go, if a minute has passed since.
+    @ObservationIgnored private var rowsReadAt = Date.distantPast
     @ObservationIgnored private var nowPlayingLoad: Task<Void, Never>?
     @ObservationIgnored private var upNextLoad: Task<Void, Never>?
     /// A channel asked for by its place in Recents (⌘1…⌘9, ⌘[), while Recents is read.
@@ -434,14 +437,17 @@ typealias ChannelSection = TunerCore.Section
     }
 
     /// What depends on the time, read again on the minute while the window is visible: what is on now,
-    /// the Sports section's channels when it is the section chosen (it lists the channels with a sport
-    /// on now), and the search results while they show. A read that finds what is shown changes
-    /// nothing on screen. The reads that show stars wait while a favourite is still being written,
-    /// and are made once it is (`favouriteWrites`).
+    /// the Sports section's channels when it is the section shown (it lists the channels with a sport
+    /// on now; covered by search results, it is read when they go), and the search results while they
+    /// show. A read that finds what is shown changes nothing on screen. The reads that show stars wait
+    /// while a favourite is still being written, and are made once it is (`favouriteWrites`).
     private func reloadForNewMinute() {
         reloadNowPlaying()
-        if currentSection == .sports, favouriteWrites.mayRead(.rows) { reloadRows() }
-        if searchResults != nil, favouriteWrites.mayRead(.search) { refreshSearchResults() }
+        if searchResults == nil {
+            if currentSection == .sports, favouriteWrites.mayRead(.rows) { reloadRows() }
+        } else if favouriteWrites.mayRead(.search) {
+            refreshSearchResults()
+        }
     }
 
     /// A failed read keeps what is shown.
@@ -598,9 +604,16 @@ typealias ChannelSection = TunerCore.Section
         }
     }
 
+    /// A Sports list left covered across a minute boundary is read now, as the results go.
     private func clearSearchResults() {
         resultsText = nil
-        if searchResults != nil { searchResults = nil }
+        if searchResults != nil {
+            searchResults = nil
+            if currentSection == .sports, Self.minute(of: Date()) != Self.minute(of: rowsReadAt),
+               favouriteWrites.mayRead(.rows) {
+                reloadRows()
+            }
+        }
         if showsSearchResults { showsSearchResults = false }
         if selectedResultID != nil { selectedResultID = nil }
         if chosenProgramme != nil { chosenProgramme = nil }
@@ -627,9 +640,10 @@ typealias ChannelSection = TunerCore.Section
         let section = currentSection
         let store = self.store
         let ticket = favouriteWrites.ticket
+        let now = Date()
         rowsLoad = Task {
             let loaded = await Task.detached(priority: .userInitiated) {
-                try? store.channels(in: section, at: Date())
+                try? store.channels(in: section, at: now)
             }.value
             guard !Task.isCancelled, section == currentSection else { return }
             guard let loaded else {
@@ -641,6 +655,7 @@ typealias ChannelSection = TunerCore.Section
                 return
             }
             apply(rows: loaded, of: section)
+            rowsReadAt = now
             if selectingFirst, selectedChannelID == nil { selectedChannelID = loaded.first?.id }
             if favouriteWrites.check(.rows, since: ticket) == .readAgainNow { reloadRows() }
         }
