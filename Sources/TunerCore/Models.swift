@@ -117,3 +117,14 @@ public struct ChannelRow: Identifiable, Equatable, Sendable {
     public var guideRef: Int64?
     public var isFavourite: Bool
 }
+
+public struct ProgrammeRow: Identifiable, Equatable, Sendable {
+    public var id: Int64
+    public var guideRef: Int64
+    public var start: Date
+    public var stop: Date
+    public var title: String
+    public var subTitle: String?
+    public var desc: String?
+    public var isSport: Bool
+}

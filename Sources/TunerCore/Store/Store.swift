@@ -77,6 +77,32 @@ public final class Store: Sendable {
                 CREATE VIRTUAL TABLE channel_fts USING fts5(name, content='channel', content_rowid='id');
                 """)
         }
+        migrator.registerMigration("v2") { db in
+            try db.execute(sql: """
+                CREATE TABLE guideChannel (
+                    ref INTEGER PRIMARY KEY,
+                    sourceID INTEGER NOT NULL REFERENCES source(id) ON DELETE CASCADE,
+                    id TEXT NOT NULL,
+                    displayNames TEXT NOT NULL,
+                    iconURL TEXT
+                );
+                CREATE INDEX guideChannel_source ON guideChannel(sourceID);
+                CREATE TABLE programme (
+                    id INTEGER PRIMARY KEY,
+                    guideRef INTEGER NOT NULL REFERENCES guideChannel(ref) ON DELETE CASCADE,
+                    start INTEGER NOT NULL,
+                    stop INTEGER NOT NULL,
+                    title TEXT NOT NULL,
+                    subTitle TEXT,
+                    desc TEXT,
+                    isSport INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE INDEX programme_channel ON programme(guideRef, start);
+                CREATE INDEX programme_time ON programme(start, stop);
+                CREATE VIRTUAL TABLE programme_fts USING fts5(
+                    title, subTitle, desc, content='programme', content_rowid='id');
+                """)
+        }
         return migrator
     }
 

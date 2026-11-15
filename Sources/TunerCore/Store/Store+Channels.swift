@@ -77,6 +77,7 @@ extension Store {
                       AND (SELECT COUNT(*) FROM channel c WHERE c.name = \(table).name) = 1
                     """)
             }
+            try Self.rematch(db)
         }
     }
 
@@ -94,7 +95,15 @@ extension Store {
             sql = "SELECT \(columns) FROM channel c WHERE c.groupTitle = ? ORDER BY c.sortIndex, c.id"
             arguments = [title]
         case .sports:
-            sql = "SELECT \(columns) FROM channel c WHERE c.isSportsGroup = 1 ORDER BY c.sortIndex, c.id"
+            let seconds = Int64(date.timeIntervalSince1970)
+            sql = """
+                SELECT \(columns) FROM channel c
+                WHERE c.isSportsGroup = 1 OR (c.guideRef IS NOT NULL AND EXISTS (
+                    SELECT 1 FROM programme p WHERE p.guideRef = c.guideRef AND p.isSport = 1
+                        AND p.start <= ? AND p.stop > ?))
+                ORDER BY c.sortIndex, c.id
+                """
+            arguments = [seconds, seconds]
         case .favourites:
             sql = """
                 SELECT \(columns) FROM favourite r
