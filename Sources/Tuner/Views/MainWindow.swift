@@ -20,8 +20,8 @@ struct MainWindow: View {
     @State private var searchFieldAfterFullScreen = false
     /// The columns before the search field showed a hidden sidebar; Escape puts them back. Forgotten
     /// when the owner shows or hides a column, when the search's results go without Escape (a section
-    /// chosen, the field cleared), and when the field is asked for again with the sidebar showing and
-    /// no results up (an earlier search that showed it ended before finding anything).
+    /// chosen, the field cleared), when the field loses the keyboard with nothing typed, and when the
+    /// field is asked for again with the sidebar showing and no results up.
     @State private var columnsBeforeSearch: NavigationSplitViewVisibility?
 
     var body: some View {
@@ -59,6 +59,14 @@ struct MainWindow: View {
             // The search ended. By Escape, which has already taken the columns to put back; any other
             // way, and the sidebar stays as it is, whatever starts the next search.
             if !showing { columnsBeforeSearch = nil }
+        }
+        .onChange(of: focus) { old, now in
+            // The field left with nothing typed (a click elsewhere): that search is over, and the
+            // sidebar it showed stays, whatever starts the next one. Nothing typed, not no results: a
+            // letter typed in a list is in the text before the field has the keyboard, and the
+            // results come a moment later. Escape takes the columns to put back before it moves the
+            // keyboard.
+            if old == .search, now != .search, model.searchText.isEmpty { columnsBeforeSearch = nil }
         }
         .onChange(of: videoFullScreen) { _, on in
             if on {
