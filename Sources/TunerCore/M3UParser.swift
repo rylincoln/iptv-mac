@@ -28,7 +28,11 @@ public enum M3UParser {
 
             if line.hasPrefix("#") {
                 if line.hasPrefix("#EXTINF:") {
-                    if pending != nil { skipped += 1 }
+                    if pending != nil {
+                        // The entry before never got a URL; a group line after it was its own.
+                        skipped += 1
+                        extgrp = nil
+                    }
                     pending = parseExtinf(line.dropFirst("#EXTINF:".count))
                 } else if line.hasPrefix("#EXTGRP:") {
                     let g = trimmed(line.dropFirst("#EXTGRP:".count))
@@ -134,12 +138,16 @@ public enum M3UParser {
         if name.isEmpty { name = tvgName ?? "" }
         // Never a path segment: a provider's URL often ends in the account's user name and password.
         if name.isEmpty { name = host(of: url) }
+        if name.isEmpty { name = unnamed }
         return ParsedChannel(
             name: name, tvgID: tvgID, tvgName: tvgName, logoURL: logo,
             groupTitle: group ?? extgrp, streamURL: url, extraAttributes: extra)
     }
 
-    /// Host name only: never includes credentials, port or path.
+    /// The name of a channel with no title, no `tvg-name` and no host (a `file://` address, say).
+    private static let unnamed = "Unnamed channel"
+
+    /// Host name only: never includes credentials, port or path. Empty when there is none.
     private static func host(of url: String) -> String {
         guard let r = url.range(of: "://") else { return "" }
         var rest = url[r.upperBound...]
@@ -147,7 +155,12 @@ public enum M3UParser {
             rest = rest[rest.startIndex..<end]
         }
         if let at = rest.lastIndex(of: "@") { rest = rest[rest.index(after: at)...] }
-        if !rest.hasPrefix("["), let colon = rest.lastIndex(of: ":") { rest = rest[rest.startIndex..<colon] }
+        if rest.hasPrefix("[") {
+            // An IPv6 literal: the bracketed address, without the port after it.
+            if let close = rest.firstIndex(of: "]") { rest = rest[...close] }
+        } else if let colon = rest.lastIndex(of: ":") {
+            rest = rest[rest.startIndex..<colon]
+        }
         return String(rest)
     }
 }

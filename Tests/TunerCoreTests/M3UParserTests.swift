@@ -111,6 +111,71 @@ import Testing
     #expect(r.channels[0].streamURL == "https://example.invalid/live/someuser/secret")
 }
 
+/// The group line belongs to the entry it follows; an entry that never got a URL takes it with it.
+@Test func groupOfAnEntryWithoutURLDoesNotLeakOntoTheNext() {
+    let r = M3UParser.parse("""
+    #EXTM3U
+    #EXTINF:-1,Orphan
+    #EXTGRP:Movies
+    #EXTINF:-1,Real
+    https://example.invalid/real
+    """)
+    #expect(r.channels.count == 1)
+    #expect(r.channels[0].name == "Real")
+    #expect(r.channels[0].groupTitle == nil)
+    #expect(r.skippedCount == 1)
+}
+
+@Test func ipv6HostFallbackNameHasNoPort() {
+    let r = M3UParser.parse("""
+    #EXTM3U
+    #EXTINF:-1,
+    http://user:pw@[2001:db8::1]:8080/live/a
+    """)
+    #expect(r.channels.count == 1)
+    #expect(r.channels[0].name == "[2001:db8::1]")
+}
+
+/// A file address has no host, and its path may hold anything: the name is a fixed one.
+@Test func fileURLWithoutTitleGetsAFixedName() {
+    let r = M3UParser.parse("""
+    #EXTM3U
+    #EXTINF:-1,
+    file:///Users/someone/secret/a.ts
+    """)
+    #expect(r.channels.count == 1)
+    #expect(r.channels[0].name == "Unnamed channel")
+}
+
+@Test func ftpLineIsSkipped() {
+    let r = M3UParser.parse("""
+    #EXTM3U
+    #EXTINF:-1,Files
+    ftp://example.invalid/a.ts
+    """)
+    #expect(r.channels.isEmpty)
+    #expect(r.skippedCount == 1)
+}
+
+@Test func bareNonURLLineIsSkipped() {
+    let r = M3UParser.parse("""
+    #EXTM3U
+    just some text
+    """)
+    #expect(r.channels.isEmpty)
+    #expect(r.skippedCount == 1)
+}
+
+@Test func uppercaseSchemeIsAccepted() {
+    let r = M3UParser.parse("""
+    #EXTM3U
+    #EXTINF:-1,Loud
+    HTTP://example.invalid/loud
+    """)
+    #expect(r.skippedCount == 0)
+    #expect(r.channels.map(\.streamURL) == ["HTTP://example.invalid/loud"])
+}
+
 @Test func nonURLLineIsSkipped() {
     let r = M3UParser.parse("""
     #EXTM3U
