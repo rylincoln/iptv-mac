@@ -12,6 +12,8 @@ struct PlayerPaneView: View {
     /// The height of the toolbar lying over the pane's top edge; none in full screen.
     let topInset: CGFloat
     @State private var idle = IdleWatch()
+    /// Where the pointer and the window were when a drag of the small picture began.
+    @State private var pictureDrag: (pointer: NSPoint, window: NSPoint)?
 
     /// The drawer's width, and how far in the card sits while the drawer shows.
     private static let drawerWidth: CGFloat = 340
@@ -79,6 +81,23 @@ struct PlayerPaneView: View {
             .onContinuousHover { phase in
                 if case .active = phase { idle.pointerMoved() }
             }
+            // The small picture is moved by dragging it anywhere. The layer takes the mouse before
+            // the window can, so the window is moved here: by as far as the pointer has gone on the
+            // screen since the drag began.
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 3)
+                    .onChanged { _ in
+                        guard let window = model.videoView.window else { return }
+                        let pointer = NSEvent.mouseLocation
+                        let start = pictureDrag ?? (pointer, window.frame.origin)
+                        if pictureDrag == nil { pictureDrag = start }
+                        window.setFrameOrigin(
+                            NSPoint(
+                                x: start.window.x + pointer.x - start.pointer.x,
+                                y: start.window.y + pointer.y - start.pointer.y))
+                    }
+                    .onEnded { _ in pictureDrag = nil },
+                isEnabled: model.pictureInPicture)
     }
 
     /// The channel list, with the search results over it while they show. Put away, it stays in the
