@@ -108,6 +108,8 @@ public struct SourceRow: Equatable, Sendable {
     public var lastError: String?
     public var itemCount: Int
     public var skippedCount: Int
+    /// Set when the provider answered "too many requests": it is not asked again before this time.
+    public var retryAt: Date? = nil
 }
 
 public enum Section: Hashable, Sendable { case recents, favourites, sports, all, group(String) }

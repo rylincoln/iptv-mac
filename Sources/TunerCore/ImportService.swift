@@ -7,6 +7,8 @@ public enum ImportOutcome: Equatable, Sendable {
 
 public enum ImportError: Error, Equatable {
     case http(status: Int)
+    /// The provider answered "too many requests" (HTTP 429). It is not asked again before `until`.
+    case rateLimited(until: Date)
     case notAPlaylist
     case notAGuide
     case unreadable
@@ -102,6 +104,8 @@ public struct ImportService: Sendable {
         guard let source = try store.sources().first(where: { $0.id == sourceID }) else {
             throw ImportError.unreadable
         }
+        // Inside a wait the provider set: the same answer, without asking it again.
+        if let retryAt = source.retryAt, retryAt > now() { throw ImportError.rateLimited(until: retryAt) }
         do {
             let fetched = try await fetch(source)
             defer { if let temp = fetched.temporary { try? FileManager.default.removeItem(at: temp) } }
@@ -119,9 +123,12 @@ public struct ImportService: Sendable {
         } catch is CancellationError {
             throw CancellationError()
         } catch {
+            var retryAt: Date?
+            if case ImportError.rateLimited(let until) = error { retryAt = until }
             try? store.recordRefresh(
                 sourceID: sourceID, etag: source.etag, itemCount: source.itemCount,
-                skippedCount: source.skippedCount, error: Self.message(for: error), at: now())
+                skippedCount: source.skippedCount, error: Self.message(for: error), at: now(),
+                retryAt: retryAt)
             throw error
         }
     }
@@ -165,6 +172,11 @@ public struct ImportService: Sendable {
         }
         guard (200..<300).contains(http.statusCode) else {
             try? FileManager.default.removeItem(at: downloaded)
+            if http.statusCode == 429 {
+                let asked = now()
+                let wait = RetryAfter.wait(header: http.value(forHTTPHeaderField: "Retry-After"), now: asked)
+                throw ImportError.rateLimited(until: asked.addingTimeInterval(wait))
+            }
             throw ImportError.http(status: http.statusCode)
         }
         return Fetched(file: downloaded, temporary: downloaded, etag: http.value(forHTTPHeaderField: "ETag"))
@@ -176,6 +188,7 @@ public struct ImportService: Sendable {
     private static func message(for error: Error) -> String {
         switch error as? ImportError {
         case .http(let status): return "HTTP \(status)"
+        case .rateLimited: return "Provider is limiting requests"
         case .notAPlaylist: return "Not a playlist"
         case .notAGuide: return "Not a guide"
         case .unreadable: return "Could not load"  // a missing file, or a failed download

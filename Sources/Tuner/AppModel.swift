@@ -572,8 +572,9 @@ typealias ChannelSection = TunerCore.Section
             return kind == .playlist ? "\(items.formatted()) channels" : "\(items.formatted()) programmes"
         case .success(.notModified):
             return "Up to date"
-        case .failure:
-            return recordedError(sourceID: sourceID, store: store)
+        case .failure(let error):
+            let text = failureText(error, sourceID: sourceID, store: store)
+            return text.prefix(1).uppercased() + text.dropFirst()
         }
     }
 
@@ -581,9 +582,10 @@ typealias ChannelSection = TunerCore.Section
         guard let sources = try? store.sources(), !sources.isEmpty else { return "No sources" }
         var failure: String?
         for source in sources.filter({ $0.kind == .playlist }) + sources.filter({ $0.kind == .guide }) {
-            if case .failure = await run(source.kind, sourceID: source.id, importer: importer), failure == nil {
+            if case .failure(let error) = await run(source.kind, sourceID: source.id, importer: importer),
+               failure == nil {
                 let kind = source.kind == .playlist ? "Playlist" : "Guide"
-                failure = "\(kind): \(recordedError(sourceID: source.id, store: store))"
+                failure = "\(kind): \(failureText(error, sourceID: source.id, store: store))"
             }
         }
         if let failure { return failure }
@@ -602,6 +604,17 @@ typealias ChannelSection = TunerCore.Section
         } catch {
             return .failure(error)
         }
+    }
+
+    /// What to show for a failed import. A provider's "too many requests" says when to try again:
+    /// until then a refresh does not ask the provider at all.
+    nonisolated private static func failureText(_ error: Error, sourceID: Int64, store: Store) -> String {
+        guard case ImportError.rateLimited(let until) = error else {
+            return recordedError(sourceID: sourceID, store: store)
+        }
+        let sameDay = Calendar.current.isDate(until, inSameDayAs: Date())
+        let when = until.formatted(date: sameDay ? .omitted : .abbreviated, time: .shortened)
+        return "provider is limiting requests, try again after \(when)"
     }
 
     /// The short fixed message `ImportService` recorded for the source.

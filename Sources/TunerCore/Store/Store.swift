@@ -118,6 +118,9 @@ public final class Store: Sendable {
                     title, subTitle, desc, content='programme', content_rowid='id', prefix='1');
                 """)
         }
+        migrator.registerMigration("v3") { db in
+            try db.execute(sql: "ALTER TABLE source ADD COLUMN retryAt INTEGER")
+        }
         return migrator
     }
 

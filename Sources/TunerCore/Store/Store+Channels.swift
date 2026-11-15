@@ -24,28 +24,35 @@ extension Store {
     public func sources() throws -> [SourceRow] {
         try db.read { db in
             try Row.fetchAll(db, sql: """
-                SELECT id, kind, location, etag, lastRefreshAt, lastError, itemCount, skippedCount
+                SELECT id, kind, location, etag, lastRefreshAt, lastError, itemCount, skippedCount, retryAt
                 FROM source ORDER BY id
                 """).compactMap { row in
                 guard let kind = SourceKind(rawValue: row["kind"]) else { return nil }
                 let refreshed: Int64? = row["lastRefreshAt"]
+                let retryAt: Int64? = row["retryAt"]
                 return SourceRow(
                     id: row["id"], kind: kind, location: row["location"], etag: row["etag"],
                     lastRefreshAt: refreshed.map { Date(timeIntervalSince1970: TimeInterval($0)) },
                     lastError: row["lastError"], itemCount: row["itemCount"],
-                    skippedCount: row["skippedCount"])
+                    skippedCount: row["skippedCount"],
+                    retryAt: retryAt.map { Date(timeIntervalSince1970: TimeInterval($0)) })
             }
         }
     }
 
+    /// `retryAt`: the time before which the provider must not be asked again, or nil for none.
     public func recordRefresh(
-        sourceID: Int64, etag: String?, itemCount: Int, skippedCount: Int, error: String?, at: Date
+        sourceID: Int64, etag: String?, itemCount: Int, skippedCount: Int, error: String?, at: Date,
+        retryAt: Date? = nil
     ) throws {
         try db.write { db in
             try db.execute(sql: """
                 UPDATE source SET etag = ?, itemCount = ?, skippedCount = ?, lastError = ?,
-                    lastRefreshAt = ? WHERE id = ?
-                """, arguments: [etag, itemCount, skippedCount, error, Int64(at.timeIntervalSince1970), sourceID])
+                    lastRefreshAt = ?, retryAt = ? WHERE id = ?
+                """, arguments: [
+                    etag, itemCount, skippedCount, error, Int64(at.timeIntervalSince1970),
+                    retryAt.map { Int64($0.timeIntervalSince1970.rounded(.up)) }, sourceID,
+                ])
         }
     }
 

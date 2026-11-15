@@ -112,8 +112,8 @@ private func emptyFolder() throws -> URL {
     return folder
 }
 
-private func service(_ store: Store, session: URLSession = .shared) -> ImportService {
-    ImportService(store: store, session: session, now: { fixedNow })
+private func service(_ store: Store, session: URLSession = .shared, now: Date = fixedNow) -> ImportService {
+    ImportService(store: store, session: session, now: { now })
 }
 
 private func source(_ store: Store, _ id: Int64) throws -> SourceRow {
@@ -356,5 +356,84 @@ private func expectGuideInStore(_ store: Store) throws {
             try await service(store).importPlaylist(sourceID: id)
         }
         #expect(try source(store, id).lastError == "Could not load")
+    }
+
+    // MARK: Provider rate limit (HTTP 429)
+
+    @Test func retryAfterReadsSecondsAndDates() {
+        #expect(RetryAfter.delay(from: "120", now: fixedNow) == 120)
+        #expect(RetryAfter.delay(from: " 7 ", now: fixedNow) == 7)
+        let date = RetryAfter.httpDate(fixedNow.addingTimeInterval(600))
+        #expect(RetryAfter.delay(from: date, now: fixedNow) == 600)
+        // Absent, unreadable or in the past: no usable wait.
+        #expect(RetryAfter.delay(from: nil, now: fixedNow) == nil)
+        #expect(RetryAfter.delay(from: "soon", now: fixedNow) == nil)
+        #expect(RetryAfter.delay(from: "-5", now: fixedNow) == nil)
+        #expect(RetryAfter.delay(from: RetryAfter.httpDate(fixedNow.addingTimeInterval(-60)), now: fixedNow) == nil)
+    }
+
+    @Test func retryAfterWaitIsBounded() {
+        #expect(RetryAfter.wait(header: nil, now: fixedNow) == 300)
+        #expect(RetryAfter.wait(header: "0", now: fixedNow) == 300)
+        #expect(RetryAfter.wait(header: "5", now: fixedNow) == 60)
+        #expect(RetryAfter.wait(header: "900", now: fixedNow) == 900)
+        #expect(RetryAfter.wait(header: "99999999999999999999", now: fixedNow) == 300)
+        #expect(RetryAfter.wait(header: "9999999", now: fixedNow) == 86_400)
+    }
+
+    @Test func http429KeepsOldDataAndRecordsTheWait() async throws {
+        let store = try Store.inMemory()
+        let id = try store.addSource(kind: .playlist, location: "https://example.invalid/list-429?token=SECRET")
+        try store.replaceChannels(sourceID: id, with: [ParsedChannel(name: "Old", streamURL: "http://example.invalid/old")])
+        StubProtocol.route("/list-429") { _ in StubResponse(status: 429, headers: ["Retry-After": "120"]) }
+        let until = fixedNow.addingTimeInterval(120)
+        await #expect(throws: ImportError.rateLimited(until: until)) {
+            try await service(store, session: stubSession()).importPlaylist(sourceID: id)
+        }
+        let row = try source(store, id)
+        #expect(row.lastError == "Provider is limiting requests")
+        #expect(row.retryAt == until)
+        #expect(try store.channels(in: .all, at: fixedNow).map(\.name) == ["Old"])
+    }
+
+    @Test func http429WithoutRetryAfterWaitsFiveMinutes() async throws {
+        let store = try Store.inMemory()
+        let id = try store.addSource(kind: .playlist, location: "https://example.invalid/list-429-bare")
+        StubProtocol.route("/list-429-bare") { _ in StubResponse(status: 429) }
+        await #expect(throws: ImportError.rateLimited(until: fixedNow.addingTimeInterval(300))) {
+            try await service(store, session: stubSession()).importPlaylist(sourceID: id)
+        }
+    }
+
+    @Test func refreshDuringTheWaitMakesNoRequestAndAfterItClearsTheWait() async throws {
+        let store = try Store.inMemory()
+        let id = try store.addSource(kind: .playlist, location: "https://example.invalid/list-429-then-ok")
+        let requests = Mutex(0)
+        let limited = Mutex(true)
+        StubProtocol.route("/list-429-then-ok") { _ in
+            requests.withLock { $0 += 1 }
+            return limited.withLock { $0 }
+                ? StubResponse(status: 429, headers: ["Retry-After": "120"])
+                : StubResponse(body: Data(playlistText.utf8))
+        }
+        let until = fixedNow.addingTimeInterval(120)
+        await #expect(throws: ImportError.rateLimited(until: until)) {
+            try await service(store, session: stubSession()).importPlaylist(sourceID: id)
+        }
+        // Still inside the wait: the same answer, and the provider is not asked again.
+        await #expect(throws: ImportError.rateLimited(until: until)) {
+            try await service(store, session: stubSession(), now: fixedNow.addingTimeInterval(119))
+                .importPlaylist(sourceID: id)
+        }
+        #expect(requests.withLock { $0 } == 1)
+        #expect(try source(store, id).retryAt == until)
+
+        limited.withLock { $0 = false }
+        let outcome = try await service(store, session: stubSession(), now: until).importPlaylist(sourceID: id)
+        #expect(outcome == .imported(items: 2, skipped: 1))
+        #expect(requests.withLock { $0 } == 2)
+        let row = try source(store, id)
+        #expect(row.retryAt == nil)
+        #expect(row.lastError == nil)
     }
 }
