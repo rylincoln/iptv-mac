@@ -16,6 +16,12 @@ let package = Package(
             dependencies: [.product(name: "GRDB", package: "GRDB.swift")],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
+        .binaryTarget(name: "VLCKit", path: "Vendor/VLCKit.xcframework"),
+        .executableTarget(
+            name: "Tuner",
+            dependencies: ["TunerCore", "VLCKit"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
         .testTarget(
             name: "TunerCoreTests",
             dependencies: ["TunerCore"],

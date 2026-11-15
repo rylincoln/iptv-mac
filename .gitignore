@@ -5,6 +5,7 @@ sample_files/
 .superpowers/
 .DS_Store
 .build/
+build/
 DerivedData/
 xcuserdata/
 Vendor/
