@@ -28,9 +28,9 @@ private extension ChannelRow {
     var resultID: SearchResultID { .channel(id) }
 }
 
-/// Shown in place of the channel list while a search has results: "On now", "Later" and "Channels",
-/// each left out when empty, as one list the arrow keys move straight through. Return or a
-/// double-click acts on a row (`AppModel.activateSearchResult`).
+/// Shown over the channel list, which stays in the window beneath it, while a search has results:
+/// "On now", "Later" and "Channels", each left out when empty, as one list the arrow keys move
+/// straight through. Return or a double-click acts on a row (`AppModel.activateSearchResult`).
 struct SearchResultsView: View {
     @Bindable var model: AppModel
     let results: SearchResults

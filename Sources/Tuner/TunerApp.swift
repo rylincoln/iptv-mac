@@ -62,8 +62,9 @@ private struct MainWindow: View {
             if videoFullScreen {
                 videoFullScreen = false
             } else if !model.searchText.isEmpty || focus == .search {
-                // Leaves the search: the channel list comes back with its section and selection. It
-                // replaces the results in this update, and can take focus only once it is there.
+                // Leaves the search: the channel list, kept in the window under the results, shows
+                // again with its section and selection. It is uncovered in this update, and can take
+                // focus only once that is done.
                 model.searchText = ""
                 Task { focus = .channelList }
             }

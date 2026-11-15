@@ -48,7 +48,7 @@ typealias ChannelSection = TunerCore.Section
             scheduleSearch()
         }
     }
-    /// What `searchText` found, shown in place of the channel list. Nil when the text has no letters
+    /// What `searchText` found, shown over the channel list. Nil when the text has no letters
     /// or digits to search for; empty lists when it has but nothing matches.
     private(set) var searchResults: SearchResults?
     /// The highlighted result. The first row is selected whenever new results arrive.
@@ -219,8 +219,9 @@ typealias ChannelSection = TunerCore.Section
         }
     }
 
-    /// Holds the activity the status needs, and no other: the new one is taken before the old one is
-    /// released, so there is no gap and never two. Nothing is held while idle.
+    /// Holds the activity the status needs, and no other. On a change the new one is taken before the
+    /// old one is released, so there is never a moment with neither; for that instant both are held.
+    /// Nothing is held while idle.
     private func updateActivity(for status: PlaybackSupervisor.Status) {
         let needed = PlaybackActivity.needed(for: status)
         guard heldActivity?.kind != needed else { return }
