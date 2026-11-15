@@ -16,30 +16,15 @@ struct ChannelListView: View {
         // own), and it is not hit-tested.
         let covered = model.searchResults != nil || !model.hasChannels
         ZStack {
-            channelList(covered: covered)
-                .opacity(covered ? 0 : 1)
-                .focusable(!covered, interactions: [])
-                .allowsHitTesting(!covered)
-                .accessibilityHidden(covered)
-                .onChange(of: covered) { _, isCovered in
-                    // Covered while it had the keyboard (results came in, or the library proved empty):
-                    // the keyboard goes to the results, or nowhere. Uncovered with nothing focused (the
-                    // first import, a section chosen while searching): to the list, as when it first
-                    // appears. On the next turn, once the focus bindings above have changed.
-                    Task {
-                        if isCovered {
-                            if focus.wrappedValue == .covered {
-                                focus.wrappedValue = model.searchResults != nil ? .channelList : nil
-                            }
-                        } else if focus.wrappedValue == nil {
-                            focus.wrappedValue = .channelList
-                        }
-                    }
-                }
+            // Compared only on `covered`, so a new set of results, or a favourite patched into them,
+            // updates this view and the results without rebuilding the channel list.
+            ChannelList(model: model, covered: covered, focus: focus)
+                .equatable()
                 .onChange(of: focus.wrappedValue) { _, now in
-                    // The focus value can turn `.covered` after the change above has already run
-                    // (results arriving just as the list was clicked). Whenever it does, hand the
-                    // keyboard on, so the covered list never keeps it.
+                    // The focus value can turn `.covered` after the list's own change for being
+                    // covered has run (results arriving just as the list was clicked). Whenever it
+                    // does, hand the keyboard on, so the covered list never keeps it. Watched here:
+                    // the list does not update when only the focus changes.
                     guard now == .covered else { return }
                     Task {
                         if focus.wrappedValue == .covered {
@@ -59,8 +44,43 @@ struct ChannelListView: View {
             }
         }
     }
+}
 
-    private func channelList(covered: Bool) -> some View {
+/// The channel list, under whatever covers it. It updates for what it reads itself (rows, selection,
+/// what is on now) and when `covered` changes, never for the parent's other reasons.
+private struct ChannelList: View, Equatable {
+    @Bindable var model: AppModel
+    let covered: Bool
+    var focus: FocusState<PaneFocus?>.Binding
+
+    /// The model is the window's one model for its whole life, and the focus binding never changes.
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.covered == rhs.covered }
+
+    var body: some View {
+        list
+            .opacity(covered ? 0 : 1)
+            .focusable(!covered, interactions: [])
+            .allowsHitTesting(!covered)
+            .accessibilityHidden(covered)
+            .onChange(of: covered) { _, isCovered in
+                // Covered while it had the keyboard (results came in, or the library proved empty):
+                // the keyboard goes to the results, or nowhere. Uncovered with nothing focused (the
+                // first import, a section chosen while searching): to the list, as when it first
+                // appears. On the next turn, once the focus bindings above have changed. (A focus
+                // value that turns `.covered` later is handled in `ChannelListView`.)
+                Task {
+                    if isCovered {
+                        if focus.wrappedValue == .covered {
+                            focus.wrappedValue = model.searchResults != nil ? .channelList : nil
+                        }
+                    } else if focus.wrappedValue == nil {
+                        focus.wrappedValue = .channelList
+                    }
+                }
+            }
+    }
+
+    private var list: some View {
         // Read once here, so rows get plain values and nothing per row touches the model.
         let nowPlaying = model.nowPlaying
         let now = model.nowPlayingAt
