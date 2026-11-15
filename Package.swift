@@ -27,10 +27,6 @@ let package = Package(
             dependencies: ["TunerCore"],
             swiftSettings: [
                 .swiftLanguageMode(.v6),
-                // Command Line Tools without Xcode: the build intermittently fails to resolve the
-                // Swift Testing macro plugin ("plugin for module 'TestingMacros' not found").
-                // Naming its directory makes the lookup deterministic.
-                .unsafeFlags(["-plugin-path", "/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing"]),
             ]
         ),
     ]
