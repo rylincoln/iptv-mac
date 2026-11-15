@@ -340,14 +340,14 @@ typealias ChannelSection = TunerCore.Section
     // MARK: Guide
 
     /// The main window reports whether it is on screen. The minute timer runs only while it is; on
-    /// becoming visible again, a list read in an earlier minute is read again at once.
+    /// becoming visible again, what was read in an earlier minute is read again at once.
     func windowVisibilityChanged(_ visible: Bool) {
         guard visible != isWindowVisible else { return }
         isWindowVisible = visible
         minuteTimer?.invalidate()
         minuteTimer = nil
         guard visible else { return }
-        if Self.minute(of: Date()) != Self.minute(of: nowPlayingAt) { reloadNowPlaying() }
+        if Self.minute(of: Date()) != Self.minute(of: nowPlayingAt) { reloadForNewMinute() }
         scheduleMinuteTimer()
     }
 
@@ -357,7 +357,7 @@ typealias ChannelSection = TunerCore.Section
         let timer = Timer(fire: boundary, interval: 0, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, self.isWindowVisible else { return }
-                self.reloadNowPlaying()
+                self.reloadForNewMinute()
                 self.scheduleMinuteTimer()
             }
         }
@@ -368,6 +368,14 @@ typealias ChannelSection = TunerCore.Section
 
     private static func minute(of date: Date) -> Int64 {
         Int64((date.timeIntervalSince1970 / 60).rounded(.down))
+    }
+
+    /// What depends on the time, read again on the minute while the window is visible: what is on now,
+    /// and the Sports section's channels when it is the section chosen (it lists the channels with a
+    /// sport on now). A read that finds what is shown changes nothing on screen.
+    private func reloadForNewMinute() {
+        reloadNowPlaying()
+        if currentSection == .sports { reloadRows() }
     }
 
     /// A failed read keeps what is shown.
@@ -540,15 +548,30 @@ typealias ChannelSection = TunerCore.Section
     }
 
     /// Keeps the selection on the same channel, judged by stream URL: an import reassigns ids, so an
-    /// id that is still listed may now name a different channel.
+    /// id that is still listed may now name a different channel. When the section is read again and
+    /// the channel has left it (its sport over, say), the selection moves to the channel that takes
+    /// its place, as when a favourite is removed. Rows equal to those shown are not assigned, so a
+    /// list read again unchanged is not updated.
     private func apply(rows newRows: [ChannelRow], of section: ChannelSection) {
+        let oldRows = rows
+        let readAgain = rowsSection == section
         rowsSection = section
-        let selected = selectedChannelID.flatMap { id in rows.first { $0.id == id } }
-        rows = newRows
+        let selected = selectedChannelID.flatMap { id in oldRows.first { $0.id == id } }
+        if newRows != oldRows { rows = newRows }
         refreshPlayingChannel(from: newRows)
         guard let selected else { return }
         if newRows.contains(where: { $0.id == selected.id && $0.streamURL == selected.streamURL }) { return }
-        selectedChannelID = newRows.first { $0.streamURL == selected.streamURL }?.id
+        if let same = newRows.first(where: { $0.streamURL == selected.streamURL }) {
+            selectedChannelID = same.id
+        } else if readAgain {
+            let listed = Set(newRows.map(\.streamURL))
+            let next = ListSelection.afterRemoving(
+                from: oldRows, where: { !listed.contains($0.streamURL) }, selected: selected.id)
+            let nextURL = next.flatMap { id in oldRows.first { $0.id == id } }?.streamURL
+            selectedChannelID = nextURL.flatMap { url in newRows.first { $0.streamURL == url } }?.id
+        } else {
+            selectedChannelID = nil
+        }
     }
 
     /// When the playing channel is listed, takes its current row: after a guide import it may have
