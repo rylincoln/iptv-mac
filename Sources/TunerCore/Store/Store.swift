@@ -100,7 +100,7 @@ public final class Store: Sendable {
                 CREATE INDEX programme_channel ON programme(guideRef, start);
                 CREATE INDEX programme_time ON programme(start, stop);
                 CREATE VIRTUAL TABLE programme_fts USING fts5(
-                    title, subTitle, desc, content='programme', content_rowid='id');
+                    title, subTitle, desc, content='programme', content_rowid='id', prefix='1');
                 """)
         }
         return migrator
