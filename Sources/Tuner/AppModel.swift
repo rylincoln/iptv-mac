@@ -123,8 +123,9 @@ typealias ChannelSection = TunerCore.Section
 
     private static let searchPause: Duration = .milliseconds(80)
 
-    /// The reads that show stars: the channel list and the search results.
-    private enum StarRead: Hashable, Sendable { case rows, search }
+    /// The reads that show stars: the channel list, the search results, and one stream's star, read
+    /// back after its write failed.
+    private enum StarRead: Hashable, Sendable { case rows, search, favourite(streamURL: String) }
 
     init(store: Store, message: String? = nil) {
         self.store = store
@@ -304,8 +305,9 @@ typealias ChannelSection = TunerCore.Section
 
     /// Shows the change at once, stars and the Favourites section alike, without waiting for the write,
     /// which can sit behind an import; until every such write has ended, reads of the store wait or are
-    /// made again (`favouriteWrites`). A write that fails puts the change back, so the stars show what
-    /// the store holds.
+    /// made again (`favouriteWrites`). The star of a write that fails is read back from the store once
+    /// every write has ended, so the stars show what the store holds. Not simply put back: when two
+    /// writes for a stream both fail, putting each back leaves the star the wrong way.
     func toggleFavourite(_ channel: ChannelRow) {
         let on = !channel.isFavourite
         showFavourite(on, streamURL: channel.streamURL)
@@ -315,17 +317,42 @@ typealias ChannelSection = TunerCore.Section
             let written = await Task.detached(priority: .userInitiated) {
                 (try? store.setFavourite(on, streamURL: channel.streamURL, name: channel.name)) != nil
             }.value
-            if !written { showFavourite(!on, streamURL: channel.streamURL) }
+            if !written { favouriteWrites.hold(.favourite(streamURL: channel.streamURL)) }
             if let reads = favouriteWrites.end() { readAfterFavouriteWrites(reads) }
         }
     }
 
-    /// Every favourite write has ended. The reads that may have missed one are made again, and the
-    /// Favourites section is read again while it is the section chosen: a channel starred elsewhere
-    /// shows there only once read, and a row whose removal could not be written comes back.
+    /// Every favourite write has ended. The reads that may have missed one are made again, stars whose
+    /// writes failed are read back, and the Favourites section is read again while it is the section
+    /// chosen: a channel starred elsewhere shows there only once read, and a row whose removal could
+    /// not be written comes back.
     private func readAfterFavouriteWrites(_ reads: Set<StarRead>) {
         if reads.contains(.rows) || currentSection == .favourites { reloadRows() }
         if reads.contains(.search) { refreshSearchResults() }
+        let unwritten = reads.compactMap { read -> String? in
+            if case .favourite(let streamURL) = read { return streamURL }
+            return nil
+        }
+        if !unwritten.isEmpty { readBackFavourites(of: unwritten) }
+    }
+
+    /// Shows each stream's star as the store has it, read off the main thread. A star changed again
+    /// while it was read is left to that change, and read back after it if its write fails too.
+    private func readBackFavourites(of streamURLs: [String]) {
+        let store = self.store
+        let ticket = favouriteWrites.ticket
+        Task {
+            let stored = await Task.detached(priority: .userInitiated) {
+                streamURLs.map { streamURL in (streamURL, try? store.isFavourite(streamURL: streamURL)) }
+            }.value
+            for (streamURL, on) in stored {
+                switch favouriteWrites.check(.favourite(streamURL: streamURL), since: ticket) {
+                case .current: if let on { showFavourite(on, streamURL: streamURL) }  // a failed read changes nothing
+                case .heldUntilWritten: break  // read back once the writes have ended
+                case .readAgainNow: readBackFavourites(of: [streamURL])
+                }
+            }
+        }
     }
 
     /// Stars or unstars every row shown with the stream URL: the list, the playing channel and the

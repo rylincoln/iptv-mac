@@ -55,6 +55,12 @@ public struct OptimisticWrites<Read: Hashable & Sendable>: Sendable {
         return false
     }
 
+    /// Holds a read until the last write ends, whatever is unfinished now: for a write that failed,
+    /// whose change shown must be read back from the store once nothing more can change it.
+    public mutating func hold(_ read: Read) {
+        held.insert(read)
+    }
+
     /// For a read that has come back and been shown, begun when `ticket` was taken.
     public mutating func check(_ read: Read, since ticket: Ticket) -> Freshness {
         if unfinished > 0 {

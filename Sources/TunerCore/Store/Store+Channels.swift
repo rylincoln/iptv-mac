@@ -178,6 +178,15 @@ extension Store {
         }
     }
 
+    /// Whether the stream is a favourite, as stored.
+    public func isFavourite(streamURL: String) throws -> Bool {
+        try db.read { db in
+            try Bool.fetchOne(
+                db, sql: "SELECT EXISTS (SELECT 1 FROM favourite WHERE streamURL = ?)", arguments: [streamURL])
+                ?? false
+        }
+    }
+
     public func recordWatched(streamURL: String, name: String, at: Date) throws {
         try db.write { db in
             try db.execute(sql: """

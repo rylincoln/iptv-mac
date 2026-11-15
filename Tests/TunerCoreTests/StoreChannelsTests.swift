@@ -116,6 +116,16 @@ private func recentRows(_ store: Store) throws -> [String] {
         #expect(try store.channels(in: .favourites, at: now).isEmpty)
     }
 
+    @Test func isFavouriteReadsOneStream() throws {
+        let (store, _) = try seeded([ch("A", "a"), ch("B", "b")])
+        #expect(try !store.isFavourite(streamURL: url("a")))
+        try store.setFavourite(true, streamURL: url("a"), name: "A")
+        #expect(try store.isFavourite(streamURL: url("a")))
+        #expect(try !store.isFavourite(streamURL: url("b")))
+        try store.setFavourite(false, streamURL: url("a"), name: "A")
+        #expect(try !store.isFavourite(streamURL: url("a")))
+    }
+
     @Test func favouritesAreOrderedByNameIgnoringCase() throws {
         let (store, _) = try seeded([ch("b", "b"), ch("C", "c"), ch("A", "a"), ch("x", "x")])
         for row in try store.channels(in: .all, at: now) where row.name != "x" {

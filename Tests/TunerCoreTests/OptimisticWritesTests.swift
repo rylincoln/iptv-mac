@@ -89,6 +89,18 @@ private extension OptimisticWrites<Read> {
         #expect(freshness == .current)
     }
 
+    /// A write that failed holds a read of what the store has instead, for when every write has ended.
+    @Test func aHeldReadIsGivenWhenTheLastWriteEnds() {
+        var writes = OptimisticWrites<Read>()
+        writes.begin()
+        writes.begin()
+        writes.hold(.rows)
+        let first = writes.ending()
+        #expect(first == nil)
+        let last = writes.ending()
+        #expect(last == [.rows])
+    }
+
     @Test func endingMoreWritesThanBegunChangesNothing() {
         var writes = OptimisticWrites<Read>()
         let none = writes.ending()
