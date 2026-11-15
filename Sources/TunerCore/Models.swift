@@ -91,3 +91,29 @@ public struct XMLTVSummary: Equatable, Sendable {
         self.skipped = skipped
     }
 }
+
+public enum SourceKind: String, Sendable { case playlist, guide }
+
+public struct SourceRow: Equatable, Sendable {
+    public var id: Int64
+    public var kind: SourceKind
+    /// File path or URL string.
+    public var location: String
+    public var etag: String?
+    public var lastRefreshAt: Date?
+    public var lastError: String?
+    public var itemCount: Int
+    public var skippedCount: Int
+}
+
+public enum Section: Hashable, Sendable { case recents, favourites, sports, all, group(String) }
+
+public struct ChannelRow: Identifiable, Equatable, Sendable {
+    public var id: Int64
+    public var name: String
+    public var logoURL: String?
+    public var groupTitle: String?
+    public var streamURL: String
+    public var guideRef: Int64?
+    public var isFavourite: Bool
+}
