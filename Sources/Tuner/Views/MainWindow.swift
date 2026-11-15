@@ -18,9 +18,10 @@ struct MainWindow: View {
     @State private var columnsBeforeFullScreen = NavigationSplitViewVisibility.automatic
     /// ⌘F in video full screen: the search field takes the keyboard once the panes are back.
     @State private var searchFieldAfterFullScreen = false
-    /// The columns before the search field showed a hidden sidebar. Escape puts them back, unless the
-    /// owner has shown or hidden a column since, or the search ended some other way (see
-    /// `showSearchField`).
+    /// The columns before the search field showed a hidden sidebar; Escape puts them back. Forgotten
+    /// when the owner shows or hides a column, when the search's results go without Escape (a section
+    /// chosen, the field cleared), and when the field is asked for again with the sidebar showing and
+    /// no results up (an earlier search that showed it ended before finding anything).
     @State private var columnsBeforeSearch: NavigationSplitViewVisibility?
 
     var body: some View {
@@ -53,6 +54,11 @@ struct MainWindow: View {
         .onChange(of: model.searchFieldRequests) { showSearchField() }
         .onChange(of: columns) { _, now in
             if now != .all { columnsBeforeSearch = nil }  // the owner's own choice stands
+        }
+        .onChange(of: model.showsSearchResults) { _, showing in
+            // The search ended. By Escape, which has already taken the columns to put back; any other
+            // way, and the sidebar stays as it is, whatever starts the next search.
+            if !showing { columnsBeforeSearch = nil }
         }
         .onChange(of: videoFullScreen) { _, on in
             if on {
@@ -102,9 +108,8 @@ struct MainWindow: View {
             columnsBeforeSearch = columns
             columns = .all
         } else if model.searchResults == nil {
-            // A new search, the sidebar already showing. If an earlier search showed it, that search
-            // ended some other way than Escape (a section chosen, the field cleared): the sidebar
-            // stays, and Escape this time leaves it.
+            // A new search, the sidebar already showing. An earlier search that showed it ended before
+            // finding anything (the field left with nothing typed): the sidebar stays.
             columnsBeforeSearch = nil
         }
         Task { focus = .search }
