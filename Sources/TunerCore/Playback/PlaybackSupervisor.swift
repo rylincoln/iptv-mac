@@ -133,8 +133,13 @@ import Foundation
         previousState = state
 
         if status == .playing, wasPlaying, state == .buffering, noteRebuffer(at: time) {
-            fail(.stutter, at: time)
-            return
+            guard isAtTopBufferStep else {
+                fail(.stutter, at: time)
+                return
+            }
+            // A restart could not add buffer here; it would only cost a connection and an attempt.
+            // Ride it out: a stream that stops progressing is still caught as a stall.
+            rebufferTimes.removeAll(keepingCapacity: true)
         }
 
         if progressed {
@@ -239,6 +244,11 @@ import Foundation
     }
 
     // MARK: Buffer
+
+    /// No step is above the buffer in force, so stepping up would not change it.
+    private var isAtTopBufferStep: Bool {
+        !policy.bufferStepsMs.contains { $0 > currentBufferMs }
+    }
 
     private func moveBuffer(by direction: Int) {
         let steps = policy.bufferStepsMs

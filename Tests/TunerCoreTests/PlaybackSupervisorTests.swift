@@ -248,6 +248,39 @@ final class FakeMemory: BufferMemory, @unchecked Sendable {
         #expect(rig.status == .playing)
     }
 
+    @Test func chronicStutterAtTheTopBufferStepKeepsPlaying() {
+        let rig = Rig(remembered: 4000)
+        rig.startPlaying()
+        // Below the top step a stutter still restarts the stream once, a step up...
+        for round in 1...3 {
+            rig.tick(progress: true, state: .buffering)
+            if round < 3 { rig.tick(progress: true, state: .playing) }
+        }
+        #expect(rig.status == .reconnecting(attempt: 1))
+        #expect(rig.supervisor.currentBufferMs == 8000)
+        rig.recover()
+        #expect(rig.status == .playing)
+        let plays = rig.player.plays.count
+        // ...but at the top step a restart cannot add buffer. Five minutes of a rebuffer every 12 s
+        // are ridden out: no restart, no failure counted, never "unavailable".
+        for _ in 1...25 {
+            rig.tick(progress: true, state: .buffering)
+            rig.tick(progress: true, state: .playing)
+            rig.run(10, progress: true, state: .playing)
+        }
+        #expect(rig.status == .playing)
+        #expect(!rig.statuses.contains(.unavailable))
+        #expect(rig.player.plays.count == plays)
+        #expect(rig.supervisor.reconnectCount == 1)
+        #expect(rig.memory.bufferMs(forStreamURL: urlA) == 8000)
+        // A real stall at the top step is still caught.
+        rig.freeze()
+        #expect(rig.status == .reconnecting(attempt: 1))
+        rig.tick()
+        #expect(rig.player.plays.count == plays + 1)
+        #expect(rig.player.plays.last?.bufferMs == 8000)
+    }
+
     @Test func rebuffersSpreadOverMoreThanAMinuteAreNotAStutter() {
         let rig = Rig()
         rig.startPlaying()
