@@ -55,6 +55,8 @@ enum Gunzip {
                     stream.avail_in = UInt32(inBuf.count)
                     while stream.avail_in > 0 {
                         var status: Int32 = Z_OK
+                        let pending = stream.avail_in
+                        var produced = 0
                         try outBuffer.withUnsafeMutableBufferPointer { outBuf in
                             stream.next_out = outBuf.baseAddress
                             stream.avail_out = UInt32(chunk)
@@ -62,7 +64,7 @@ enum Gunzip {
                             guard status == Z_OK || status == Z_STREAM_END || status == Z_BUF_ERROR else {
                                 throw Failure.corrupt
                             }
-                            let produced = chunk - Int(stream.avail_out)
+                            produced = chunk - Int(stream.avail_out)
                             guard produced > 0, let start = outBuf.baseAddress else { return }
                             written += Int64(produced)
                             guard written <= limit else { throw Failure.tooLarge }
@@ -72,14 +74,16 @@ enum Gunzip {
                                 throw Failure.cannotWrite
                             }
                         }
+                        // A call that took no input and gave no output would do the same if called
+                        // again, for ever. zlib says so with Z_BUF_ERROR, but whatever the status, a
+                        // call that made no progress fails the file rather than spin.
+                        guard produced > 0 || stream.avail_in < pending else { throw Failure.corrupt }
                         if status == Z_STREAM_END {
                             // Bytes after a member must start another member: they are inflated as one,
                             // and anything else (garbage, zero padding) fails the file as corrupt.
                             sawEnd = true
                             if stream.avail_in > 0, inflateReset(&stream) != Z_OK { throw Failure.corrupt }
                             if stream.avail_in > 0 { sawEnd = false }
-                        } else if status == Z_BUF_ERROR && stream.avail_in > 0 && stream.avail_out > 0 {
-                            throw Failure.corrupt
                         }
                     }
                 }
