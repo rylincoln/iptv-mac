@@ -72,6 +72,9 @@ typealias ChannelSection = TunerCore.Section
     var showsChannelList: Bool { window.showsChannelList }
     var videoFullScreen: Bool { window.videoFullScreen }
     var pictureInPicture: Bool { window.pictureInPicture }
+    var showsGuide: Bool { window.showsGuide }
+    /// What the guide lists; it holds listings only while the guide shows.
+    let guide: GuideModel
     /// Bumped when `send` leaves the window something to do; it takes them with `takeWindowOutcomes`.
     private(set) var windowOutcomeCount = 0
     @ObservationIgnored private var windowOutcomes: [WindowState.Outcome] = []
@@ -143,6 +146,7 @@ typealias ChannelSection = TunerCore.Section
         self.store = store
         importer = ImportService(store: store, session: Self.importSession())
         player = VLCPlayer()
+        guide = GuideModel(store: store)
         // Timed by a clock that setting the wall clock cannot move, and that counts time asleep, so a
         // sleep still shows as a gap. Used for nothing else: guide times, Recents and imports read the
         // wall clock (`Date()`), since these dates drift from it once it is set.
@@ -208,6 +212,13 @@ typealias ChannelSection = TunerCore.Section
         upNextLoad?.cancel()
         upNext = []
         refreshStatsIfSeen()
+    }
+
+    /// Return or a double-click on a programme in the guide that is on now: plays it and goes back
+    /// to the video.
+    func playFromGuide(_ channel: ChannelRow) {
+        play(channel)
+        send(.leaveGuide)
     }
 
     /// "Try Again" on the unavailable state. A Recents entry asked for earlier and still being read is
@@ -416,6 +427,7 @@ typealias ChannelSection = TunerCore.Section
 
     /// ⌘D: the selected channel, or the selected result's channel while results show.
     func toggleFavouriteOnSelection() {
+        guard !showsGuide else { return }  // the lists it acts on are out of sight
         let channel: ChannelRow?
         if searchResults != nil {
             channel = selectedResultID.flatMap(searchResultChannel)
@@ -468,6 +480,7 @@ typealias ChannelSection = TunerCore.Section
     /// while a favourite is still being written, and are made once it is (`favouriteWrites`).
     private func reloadForNewMinute() {
         reloadNowPlaying()
+        guide.minutePassed()
         if searchResults == nil {
             if currentSection == .sports, favouriteWrites.mayRead(.rows) { reloadRows() }
         } else if favouriteWrites.mayRead(.search) {
@@ -517,7 +530,9 @@ typealias ChannelSection = TunerCore.Section
     func send(_ event: WindowState.Event) {
         var next = window
         let outcome = next.handle(event, playing: playingChannel != nil)
+        let guideChanged = next.showsGuide != window.showsGuide
         if next != window { window = next }
+        if guideChanged { guide.setShown(next.showsGuide) }
         if outcome != WindowState.Outcome() {
             windowOutcomes.append(outcome)
             windowOutcomeCount &+= 1
@@ -786,6 +801,7 @@ typealias ChannelSection = TunerCore.Section
         reloadNowPlaying()
         if isGroupsExpanded { loadGroups() }
         if searchResults != nil { scheduleSearch() }
+        guide.sourcesChanged()
     }
 
     nonisolated private static func add(

@@ -20,15 +20,30 @@ struct PlayerPaneView: View {
     private static let drawerWidth: CGFloat = 340
 
     var body: some View {
+        // The guide takes the pane, and the video is made small in its bottom corner: the same view,
+        // given another size, never another parent.
+        let docked = model.showsGuide
         ZStack(alignment: .bottomLeading) {
+            if docked { GuideView(model: model, guide: model.guide, focus: focus, topInset: topInset) }
             video
+                .frame(width: docked ? GuideView.dockSize.width : nil, height: docked ? GuideView.dockSize.height : nil)
+                .overlay {
+                    // Its edge, so the dock shows against the guide before a picture arrives.
+                    if docked, model.playingChannel != nil {
+                        Rectangle().strokeBorder(.white.opacity(0.15)).allowsHitTesting(false)
+                    }
+                }
+                .padding(docked ? GuideView.dockMargin : 0)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
             InfoCard(model: model, idle: idle)
                 .padding(.leading, model.showsChannelList ? Self.drawerWidth : 0)
             drawer
         }
         .overlay(alignment: .bottomTrailing) { PictureButton(model: model, idle: idle) }
         .overlay(alignment: .topTrailing) {
-            if model.showsStats { StatsOverlay(readout: model.statsReadout).padding(.top, topInset) }
+            if model.showsStats, !model.showsGuide {
+                StatsOverlay(readout: model.statsReadout).padding(.top, topInset)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
@@ -51,7 +66,7 @@ struct PlayerPaneView: View {
                 .aspectRatio(16.0 / 9.0, contentMode: .fit)
             clickLayer
             PlaybackStatusOverlay(model: model)  // above the click layer: Try Again is a button
-                .padding(.top, topInset)
+                .padding(.top, model.showsGuide ? 0 : topInset)
         }
         .focusable()
         .focusEffectDisabled()
@@ -195,7 +210,7 @@ private struct InfoCard: View {
 
     var body: some View {
         let full = model.showsChannelList
-        let visible = full || !idle.isIdle
+        let visible = !model.showsGuide && (full || !idle.isIdle)
         ZStack(alignment: .bottomLeading) {
             if visible {
                 if full, let chosen = model.chosenProgramme {
@@ -281,7 +296,7 @@ private struct PictureButton: View {
 
     var body: some View {
         let small = model.pictureInPicture
-        let visible = !idle.isIdle && (small || model.playingChannel != nil)
+        let visible = !idle.isIdle && !model.showsGuide && (small || model.playingChannel != nil)
         ZStack {
             if visible {
                 Button {

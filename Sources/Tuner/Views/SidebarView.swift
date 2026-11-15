@@ -6,14 +6,17 @@ struct SidebarView: View {
     var focus: FocusState<PaneFocus?>.Binding
 
     var body: some View {
-        List(selection: selection(unselected: model.showsSearchResults || !model.showsChannelList)) {
-            Label("Recents", systemImage: "clock").tag(ChannelSection.recents)
-            Label("Favourites", systemImage: "star").tag(ChannelSection.favourites)
-            Label("Sports", systemImage: "sportscourt").tag(ChannelSection.sports)
-            Label("All channels", systemImage: "list.bullet").tag(ChannelSection.all)
+        List(selection: selection(
+            guide: model.showsGuide, unselected: model.showsSearchResults || !model.showsChannelList)
+        ) {
+            Label("Recents", systemImage: "clock").tag(SidebarItem.section(.recents))
+            Label("Favourites", systemImage: "star").tag(SidebarItem.section(.favourites))
+            Label("Sports", systemImage: "sportscourt").tag(SidebarItem.section(.sports))
+            Label("Guide", systemImage: "calendar.day.timeline.left").tag(SidebarItem.guide)
+            Label("All channels", systemImage: "list.bullet").tag(SidebarItem.section(.all))
             DisclosureGroup("Groups", isExpanded: $model.groupsExpanded) {
                 ForEach(model.groups, id: \.self) { title in
-                    Label(title, systemImage: "folder").tag(ChannelSection.group(title))
+                    Label(title, systemImage: "folder").tag(SidebarItem.section(.group(title)))
                 }
             }
         }
@@ -28,16 +31,30 @@ struct SidebarView: View {
     /// section is selected (they are not the section's), so a click on any section, the one under
     /// the results included, leaves the search. Likewise while the channel list is put away: a click
     /// on any section, the one last shown included, brings the list back.
-    private func selection(unselected: Bool) -> Binding<ChannelSection?> {
+    /// The guide is a row among them: it takes the pane, and is the row selected while it shows.
+    private func selection(guide: Bool, unselected: Bool) -> Binding<SidebarItem?> {
         Binding(
-            get: { unselected ? nil : model.section },
+            get: { guide ? .guide : unselected ? nil : .section(model.section) },
             set: {
-                guard let section = $0 else { return }
-                model.searchText = ""
-                model.send(.sectionChosen)
-                if section != model.section { model.section = section }
+                switch $0 {
+                case nil:
+                    break
+                case .guide:
+                    model.searchText = ""
+                    model.send(.guideChosen)
+                case .section(let section):
+                    model.searchText = ""
+                    model.send(.sectionChosen)
+                    if section != model.section { model.section = section }
+                }
             })
     }
+}
+
+/// A row of the sidebar: a section of channels, or the guide.
+private enum SidebarItem: Hashable {
+    case section(ChannelSection)
+    case guide
 }
 
 /// The search field: what is typed is searched as it is typed. Return acts on the selected result and

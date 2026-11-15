@@ -6,8 +6,8 @@ import TunerCore
 /// Which pane has the keyboard. `channelList` is the middle column's list: the channels, or the search
 /// results while they show. The sidebar's search field is `search`; typing a letter in the middle
 /// list moves there. `covered` is the channel list while something covers it; nothing asks for it,
-/// so a covered list never has the keyboard.
-enum PaneFocus: Hashable { case channelList, player, search, covered }
+/// so a covered list never has the keyboard. `guide` is the guide's list of events.
+enum PaneFocus: Hashable { case channelList, player, search, covered, guide }
 
 struct MainWindow: View {
     let model: AppModel
@@ -47,7 +47,7 @@ struct MainWindow: View {
             .ignoresSafeArea()
         }
         .toolbar(videoAlone ? .hidden : .automatic, for: .windowToolbar)
-        .toolbar(removing: model.showsChannelList ? nil : .title)
+        .toolbar(removing: model.showsChannelList || model.showsGuide ? nil : .title)
         .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)  // nothing drawn across the video
         .onExitCommand {
             model.send(.escape(searching: !model.searchText.isEmpty || focus == .search))
@@ -121,6 +121,7 @@ struct MainWindow: View {
                 case .player: focus = .player
                 case .channelList: focus = .channelList
                 case .channelListUnlessSearchField: if focus != .search { focus = .channelList }
+                case .guide: focus = .guide
                 }
             }
         }
@@ -141,6 +142,7 @@ struct MainWindow: View {
     }
 
     private var title: String {
+        if model.showsGuide { return "Guide" }
         if model.searchResults != nil { return "Search" }
         switch model.section {
         case .recents: return "Recents"

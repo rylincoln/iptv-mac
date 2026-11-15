@@ -184,3 +184,76 @@ private func state(after events: WindowState.Event...) -> WindowState {
         #expect(!state.showsChannelList)
     }
 }
+
+@Suite struct WindowStateGuideTests {
+    @Test func theGuideTakesThePaneAndTheKeyboard() {
+        var state = state(after: .played, .toggleVideoFullScreen)
+        #expect(state.handle(.guideChosen, playing: true) == Outcome(focus: .guide))
+        #expect(state.showsGuide)
+        #expect(!state.showsChannelList)
+        #expect(!state.videoFullScreen)
+        // Chosen again while it shows: nothing to do.
+        #expect(state.handle(.guideChosen, playing: true) == Outcome())
+    }
+
+    @Test func itShowsWithNothingPlayingAndLeavesToTheChannelList() {
+        var state = WindowState()
+        #expect(state.handle(.toggleGuide, playing: false) == Outcome(focus: .guide))
+        #expect(state.showsGuide && !state.showsChannelList)
+        #expect(state.handle(.toggleGuide, playing: false) == Outcome(focus: .channelListUnlessSearchField))
+        #expect(!state.showsGuide && state.showsChannelList)
+    }
+
+    @Test(arguments: [WindowState.Event.leaveGuide, .videoClicked, .escape(searching: false), .toggleGuide])
+    func whileSomethingPlaysItLeavesToTheVideo(for event: WindowState.Event) {
+        var state = state(after: .played, .guideChosen)
+        #expect(state.handle(event, playing: true) == Outcome(focus: .player))
+        #expect(!state.showsGuide && !state.showsChannelList)
+    }
+
+    @Test(arguments: [WindowState.Event.sectionChosen, .searchTyped, .searchFieldFocused, .toggleChannelList])
+    func whatShowsTheChannelListLeavesIt(for event: WindowState.Event) {
+        var state = state(after: .played, .guideChosen)
+        #expect(state.handle(event, playing: true) == Outcome(focus: .channelListUnlessSearchField))
+        #expect(!state.showsGuide && state.showsChannelList)
+    }
+
+    @Test func findLeavesItForTheSearchField() {
+        var state = state(after: .guideChosen)
+        #expect(state.handle(.searchFieldRequested, playing: true) == Outcome(showSearchField: true))
+        #expect(!state.showsGuide && state.showsChannelList)
+    }
+
+    @Test func playingAndStoppingKeepIt() {
+        var state = state(after: .guideChosen)
+        #expect(state.handle(.played, playing: true) == Outcome())
+        #expect(state.handle(.stopped, playing: false) == Outcome())
+        #expect(state.showsGuide && !state.showsChannelList)
+        // Nothing playing: a click where the video would be changes nothing.
+        #expect(state.handle(.videoClicked, playing: false) == Outcome())
+        #expect(state.showsGuide)
+    }
+
+    @Test func fullScreenAndTheSmallPictureTakeAPlayingVideoOutOfIt() {
+        var state = state(after: .played, .guideChosen)
+        #expect(state.handle(.toggleVideoFullScreen, playing: true) == Outcome(focus: .player))
+        #expect(!state.showsGuide && state.videoFullScreen)
+        var other = TunerCoreTests.state(after: .played, .guideChosen)
+        #expect(other.handle(.togglePictureInPicture, playing: true) == Outcome(focus: .player))
+        #expect(!other.showsGuide && other.pictureInPicture)
+    }
+
+    @Test func withNothingPlayingFullScreenAndTheSmallPictureLeaveItBe() {
+        var state = WindowState()
+        _ = state.handle(.guideChosen, playing: false)
+        #expect(state.handle(.toggleVideoFullScreen, playing: false) == Outcome())
+        #expect(state.handle(.togglePictureInPicture, playing: false) == Outcome())
+        #expect(state.showsGuide && !state.videoFullScreen && !state.pictureInPicture)
+    }
+
+    @Test func theGuideBringsTheSmallPictureBackToTheWindow() {
+        var state = state(after: .played, .togglePictureInPicture)
+        #expect(state.handle(.guideChosen, playing: true) == Outcome(focus: .guide))
+        #expect(state.showsGuide && !state.pictureInPicture)
+    }
+}

@@ -57,6 +57,9 @@ struct ChannelCommands: Commands {
             }
             .keyboardShortcut("l", modifiers: .command)
             .disabled(model == nil)
+            Button(model?.showsGuide == true ? "Hide Guide" : "Show Guide") { model?.send(.toggleGuide) }
+                .keyboardShortcut("g", modifiers: .command)
+                .disabled(model == nil)
             Divider()
         }
         CommandMenu("Channel") {

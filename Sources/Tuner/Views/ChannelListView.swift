@@ -181,6 +181,7 @@ extension AppModel {
     /// Where the keyboard goes from a covered channel list: to the video when the list is put away,
     /// to the results when they cover it, otherwise nowhere.
     var focusAfterCovered: PaneFocus? {
+        if showsGuide { return .guide }
         if !showsChannelList { return .player }
         return searchResults != nil ? .channelList : nil
     }

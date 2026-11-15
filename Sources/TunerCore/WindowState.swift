@@ -11,6 +11,9 @@ public struct WindowState: Equatable, Sendable {
     /// Picture in picture: the window is a small video floating over other apps. Only while
     /// something plays, never with the channel list, and never full screen.
     public private(set) var pictureInPicture = false
+    /// The guide fills the pane, with the video docked small in its corner. Never with the channel
+    /// list, full screen or the small picture: whatever shows one of those leaves the guide.
+    public private(set) var showsGuide = false
 
     public init() {}
 
@@ -33,6 +36,12 @@ public struct WindowState: Equatable, Sendable {
         case toggleVideoFullScreen
         /// ⌘⇧P, or a double-click on the small picture.
         case togglePictureInPicture
+        /// The sidebar's Guide row.
+        case guideChosen
+        /// ⌘G.
+        case toggleGuide
+        /// A programme was played from the guide: back to the video.
+        case leaveGuide
         /// The window left full screen by a route of its own (the green button, Mission Control).
         case windowLeftFullScreen
         /// `searching`: the search has text, or its field has the keyboard.
@@ -45,6 +54,7 @@ public struct WindowState: Equatable, Sendable {
         case channelList
         /// The channel list, unless the search field has the keyboard or is about to get it.
         case channelListUnlessSearchField
+        case guide
     }
 
     /// What the window must do after an event, beyond showing the state as it now is.
@@ -70,19 +80,43 @@ public struct WindowState: Equatable, Sendable {
         var outcome = Outcome()
         switch event {
         case .played:
-            showsChannelList = false
-        case .stopped, .sectionChosen, .searchTyped, .searchFieldFocused:
+            showsChannelList = false  // from the guide's own keys (⌘1, say) it plays docked
+        case .stopped:
+            if !showsGuide { showsChannelList = true }
+        case .sectionChosen, .searchTyped, .searchFieldFocused:
             showsChannelList = true
+            showsGuide = false
         case .searchFieldRequested:
             // The field is in the sidebar, which full screen covers.
             showsChannelList = true
+            showsGuide = false
             videoFullScreen = false
             outcome.showSearchField = true
         case .toggleChannelList:
-            showsChannelList.toggle()
+            if showsGuide {
+                showsGuide = false
+                showsChannelList = true
+            } else {
+                showsChannelList.toggle()
+            }
         case .videoClicked:
-            if playing { showsChannelList = false }
+            // On the docked video it goes back to the video.
+            if playing {
+                showsChannelList = false
+                showsGuide = false
+            }
+        case .guideChosen:
+            showGuide()
+        case .toggleGuide:
+            if showsGuide { leaveGuide(playing: playing) } else { showGuide() }
+        case .leaveGuide:
+            leaveGuide(playing: playing)
         case .toggleVideoFullScreen:
+            // From the guide, the video goes full screen; with nothing playing there is none to.
+            if showsGuide {
+                guard playing else { break }
+                showsGuide = false
+            }
             videoFullScreen.toggle()
             if videoFullScreen, playing { showsChannelList = false }
             pictureInPicture = false
@@ -93,6 +127,7 @@ public struct WindowState: Equatable, Sendable {
                 pictureInPicture = true
                 videoFullScreen = false
                 showsChannelList = false
+                showsGuide = false
             }
         case .windowLeftFullScreen:
             videoFullScreen = false
@@ -101,6 +136,8 @@ public struct WindowState: Equatable, Sendable {
             // screen. In full screen the search field cannot be reached, so the list goes first.
             if pictureInPicture {
                 pictureInPicture = false
+            } else if showsGuide {
+                leaveGuide(playing: playing)
             } else if showsChannelList, playing, !searching || videoFullScreen {
                 showsChannelList = false
             } else if videoFullScreen {
@@ -112,11 +149,28 @@ public struct WindowState: Equatable, Sendable {
         // The small picture has no room for the list: whatever shows the list brings the window back.
         if showsChannelList { pictureInPicture = false }
         if outcome.showSearchField || outcome.leaveSearch { return outcome }  // they move the keyboard themselves
-        if videoFullScreen != before.videoFullScreen || pictureInPicture != before.pictureInPicture {
+        if showsGuide {
+            if !before.showsGuide { outcome.focus = .guide }
+        } else if before.showsGuide {
+            outcome.focus = showsChannelList ? .channelListUnlessSearchField : .player
+        } else if videoFullScreen != before.videoFullScreen || pictureInPicture != before.pictureInPicture {
             outcome.focus = showsChannelList ? .channelList : .player
         } else if showsChannelList != before.showsChannelList {
             outcome.focus = showsChannelList ? .channelListUnlessSearchField : .player
         }
         return outcome
+    }
+
+    private mutating func showGuide() {
+        showsGuide = true
+        showsChannelList = false
+        videoFullScreen = false
+        pictureInPicture = false
+    }
+
+    /// Back to the video, or to the channel list when nothing plays.
+    private mutating func leaveGuide(playing: Bool) {
+        showsGuide = false
+        if !playing { showsChannelList = true }
     }
 }
