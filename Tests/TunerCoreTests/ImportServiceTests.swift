@@ -406,8 +406,16 @@ private func expectGuideInStore(_ store: Store) throws {
             #expect(try source(store, id).lastRefreshAt == nil)
         }
 
+        // The guide is cancelled once gunzip has written its file into the folder: the service reads
+        // its clock just before it loads the guide, and this clock cancels the import then. So the
+        // cancel lands in the last and longest phase, parsing into the open transaction.
         let guideStore = try Store.inMemory()
-        let guideImporter = ImportService(store: guideStore, now: { fixedNow }, temporaryDirectory: folder)
+        let guideImporter = ImportService(store: guideStore, now: {
+            if let written = try? FileManager.default.contentsOfDirectory(atPath: folder.path), !written.isEmpty {
+                withUnsafeCurrentTask { $0?.cancel() }
+            }
+            return fixedNow
+        }, temporaryDirectory: folder)
         try await withTempFile(gzip(Data(guideXML(title: "New").utf8))) { path in
             let id = try guideStore.addSource(kind: .guide, location: path)
             try guideStore.replaceGuide(sourceID: id, now: fixedNow) { writer in
@@ -416,10 +424,7 @@ private func expectGuideInStore(_ store: Store) throws {
                     channelID: "one.example", start: fixedNow, stop: fixedNow.addingTimeInterval(3600),
                     title: "Evening News"))
             }
-            let task = Task {
-                withUnsafeCurrentTask { $0?.cancel() }
-                return try await guideImporter.importGuide(sourceID: id)
-            }
+            let task = Task { try await guideImporter.importGuide(sourceID: id) }
             await #expect(throws: CancellationError.self) { try await task.value }
             try expectGuideInStore(guideStore)  // still the old programme
             #expect(try source(guideStore, id).lastRefreshAt == nil)

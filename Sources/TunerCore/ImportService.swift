@@ -96,15 +96,22 @@ public struct ImportService: Sendable {
             }
             var summary = XMLTVSummary(channels: 0, programmes: 0, skipped: 0)
             let stored = try store.replaceGuide(sourceID: sourceID, now: now()) { writer in
-                var storeError: Error?
+                // Parsing is the longest phase, so each item checks for cancellation: a cancel then
+                // rolls the transaction back, and the old guide stays.
+                var passThrough: Error?
                 do {
                     summary = try XMLTVParser.parse(
                         fileAt: parseFile,
-                        onChannel: { do { try writer.add($0) } catch { storeError = error; throw error } },
-                        onProgramme: { do { try writer.add($0) } catch { storeError = error; throw error } })
+                        onChannel: {
+                            do { try Task.checkCancellation(); try writer.add($0) } catch { passThrough = error; throw error }
+                        },
+                        onProgramme: {
+                            do { try Task.checkCancellation(); try writer.add($0) } catch { passThrough = error; throw error }
+                        })
                 } catch {
-                    // A store failure passes through; anything else is a document that is not XMLTV.
-                    throw storeError ?? ImportError.notAGuide
+                    // A cancellation or a store failure passes through; anything else is a document
+                    // that is not XMLTV.
+                    throw passThrough ?? ImportError.notAGuide
                 }
                 // Thrown inside the transaction so the old guide stays.
                 if summary.channels == 0 && summary.programmes == 0 { throw ImportError.notAGuide }
