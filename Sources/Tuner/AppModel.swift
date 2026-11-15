@@ -93,6 +93,8 @@ typealias ChannelSection = TunerCore.Section
     /// The one `ProcessInfo` activity held, if any; see `updateActivity`.
     @ObservationIgnored private var heldActivity: (kind: PlaybackActivity, token: NSObjectProtocol)?
     @ObservationIgnored private var rowsLoad: Task<Void, Never>?
+    /// The section `rows` were read for; nil until the first read is applied.
+    @ObservationIgnored private var rowsSection: ChannelSection?
     @ObservationIgnored private var nowPlayingLoad: Task<Void, Never>?
     @ObservationIgnored private var upNextLoad: Task<Void, Never>?
     /// Fires once, on the next minute boundary; exists only while the window is visible.
@@ -471,16 +473,20 @@ typealias ChannelSection = TunerCore.Section
 
     // MARK: Lists
 
+    /// A failed read keeps what is shown.
     private func loadGroups() {
         let store = self.store
         Task {
-            groups = await Task.detached(priority: .userInitiated) { (try? store.groups()) ?? [] }.value
+            let loaded = await Task.detached(priority: .userInitiated) { try? store.groups() }.value
+            guard let loaded, loaded != groups else { return }
+            groups = loaded
         }
     }
 
-    /// A failed read keeps what is shown. `leavingEmptyRecents`: when the section is Recents and it
-    /// has nothing in it, shows All channels instead (after an import, so the first run does not land
-    /// on an empty list).
+    /// A failed read keeps what is shown when that is this section's own rows, read earlier. Rows of
+    /// the section shown before are never left under this one's title: the section shows empty
+    /// instead. `leavingEmptyRecents`: when the section is Recents and it has nothing in it, shows All
+    /// channels instead (after an import, so the first run does not land on an empty list).
     private func reloadRows(selectingFirst: Bool = false, leavingEmptyRecents: Bool = false) {
         rowsLoad?.cancel()
         let section = currentSection
@@ -489,19 +495,24 @@ typealias ChannelSection = TunerCore.Section
             let loaded = await Task.detached(priority: .userInitiated) {
                 try? store.channels(in: section, at: Date())
             }.value
-            guard !Task.isCancelled, section == currentSection, let loaded else { return }
+            guard !Task.isCancelled, section == currentSection else { return }
+            guard let loaded else {
+                if rowsSection != section { apply(rows: [], of: section) }
+                return
+            }
             if leavingEmptyRecents, section == .recents, loaded.isEmpty {
                 self.section = .all  // reloads
                 return
             }
-            apply(rows: loaded)
+            apply(rows: loaded, of: section)
             if selectingFirst, selectedChannelID == nil { selectedChannelID = loaded.first?.id }
         }
     }
 
     /// Keeps the selection on the same channel, judged by stream URL: an import reassigns ids, so an
     /// id that is still listed may now name a different channel.
-    private func apply(rows newRows: [ChannelRow]) {
+    private func apply(rows newRows: [ChannelRow], of section: ChannelSection) {
+        rowsSection = section
         let selected = selectedChannelID.flatMap { id in rows.first { $0.id == id } }
         rows = newRows
         refreshPlayingChannel(from: newRows)
