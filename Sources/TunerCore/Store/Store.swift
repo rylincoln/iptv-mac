@@ -15,9 +15,12 @@ public final class Store: Sendable {
         // pages (80 MB at 4 KB pages), and a 160,000-programme guide import was measured growing
         // memory by 84 MB with it. Spilling dirty pages to the write-ahead log after 1,000 pages kept
         // that growth near 8.5 MB at any guide size.
-        // No `journal_size_limit` is set: macOS's SQLite already defaults it to 32 KB, so the log is
-        // cut back after a checkpoint (see `writeAheadLogShrinksAfterABigWrite`).
-        configuration.prepareDatabase { db in try db.execute(sql: "PRAGMA cache_spill = 1000") }
+        // `journal_size_limit` is macOS's own default (32 KB), stated here so the log is still cut
+        // back after a checkpoint if the SQLite build ever changes (see
+        // `writeAheadLogShrinksAfterABigWrite`).
+        configuration.prepareDatabase { db in
+            try db.execute(sql: "PRAGMA cache_spill = 1000; PRAGMA journal_size_limit = 32768")
+        }
         db = try DatabasePool(path: path, configuration: configuration)   // WAL journal mode
         try Self.migrator.migrate(db)
     }
