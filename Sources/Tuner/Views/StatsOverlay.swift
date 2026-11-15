@@ -23,14 +23,9 @@ struct StatsOverlay: View {
     let readout: StatsReadout
 
     var body: some View {
-        let reading = readout.reading
+        let lines = Self.lines(readout.reading)
         VStack(alignment: .leading, spacing: 2) {
-            row("Host", reading.host ?? "-")
-            row("Bitrate", Self.bitrate(kbps: reading.inputKbps))
-            row("Buffer", "\(reading.bufferMs) ms")
-            row("Lost pictures", reading.lostPictures.formatted())
-            row("Reconnects", reading.reconnects.formatted())
-            row("Status", Self.text(for: reading.status))
+            ForEach(lines, id: \.name) { line in row(line.name, line.value) }
         }
         .font(.caption.monospacedDigit())
         .foregroundStyle(.white)
@@ -38,8 +33,27 @@ struct StatsOverlay: View {
         .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 8))
         .padding(12)
         .allowsHitTesting(false)
+        // One element for VoiceOver: the label names the panel, and the value reads out every line,
+        // which a label alone would hide.
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Playback stats")
+        .accessibilityValue(lines.map { "\($0.name) \($0.value)" }.joined(separator: ", "))
+    }
+
+    private struct Line {
+        let name: String
+        let value: String
+    }
+
+    private static func lines(_ reading: StatsReading) -> [Line] {
+        [
+            Line(name: "Host", value: reading.host ?? "-"),
+            Line(name: "Bitrate", value: bitrate(kbps: reading.inputKbps)),
+            Line(name: "Buffer", value: "\(reading.bufferMs) ms"),
+            Line(name: "Lost pictures", value: reading.lostPictures.formatted()),
+            Line(name: "Reconnects", value: reading.reconnects.formatted()),
+            Line(name: "Status", value: text(for: reading.status)),
+        ]
     }
 
     private func row(_ name: String, _ value: String) -> some View {
