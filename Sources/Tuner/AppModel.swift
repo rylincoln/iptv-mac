@@ -382,8 +382,10 @@ typealias ChannelSection = TunerCore.Section
         minuteTimer = timer
     }
 
+    /// Whole minutes since 1970, rounded down for any time after it. Never traps, whatever the date: the
+    /// seconds come from the store's own conversion, which is held far inside `Int64`.
     private static func minute(of date: Date) -> Int64 {
-        Int64((date.timeIntervalSince1970 / 60).rounded(.down))
+        Store.unixSeconds(date, rounding: .down) / 60
     }
 
     /// What depends on the time, read again on the minute while the window is visible: what is on now,

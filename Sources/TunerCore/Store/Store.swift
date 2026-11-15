@@ -133,7 +133,7 @@ public final class Store: Sendable {
 
     /// Whole seconds since 1970, as every time is stored and compared. Never traps: a time that is not a
     /// number is 0, and one beyond `unixSecondsLimit` either way, an infinity included, is held there.
-    static func unixSeconds(_ date: Date, rounding rule: FloatingPointRoundingRule = .towardZero) -> Int64 {
+    public static func unixSeconds(_ date: Date, rounding rule: FloatingPointRoundingRule = .towardZero) -> Int64 {
         let seconds = date.timeIntervalSince1970.rounded(rule)
         guard !seconds.isNaN else { return 0 }
         let limit = Double(unixSecondsLimit)
