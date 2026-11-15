@@ -121,6 +121,10 @@ public final class Store: Sendable {
         migrator.registerMigration("v3") { db in
             try db.execute(sql: "ALTER TABLE source ADD COLUMN retryAt INTEGER")
         }
+        migrator.registerMigration("v4") { db in
+            // The guide reads programmes by time and joins each to its channels.
+            try db.execute(sql: "CREATE INDEX channel_guideRef ON channel(guideRef)")
+        }
         return migrator
     }
 
