@@ -56,12 +56,7 @@ final class WindowBridgeView: NSView {
             })
         }
         observe(NSWindow.didChangeOcclusionStateNotification) { $0.reportVisibility() }
-        observe(NSWindow.willEnterFullScreenNotification) { view in
-            // Going in with the video not asking (the owner's own full screen): it is theirs to keep,
-            // whatever a transition that failed earlier left behind.
-            if !view.videoFullScreen { view.restoreWindowed = false }
-            view.transitionWillBegin()
-        }
+        observe(NSWindow.willEnterFullScreenNotification) { $0.transitionWillBegin() }
         observe(NSWindow.willExitFullScreenNotification) { $0.transitionWillBegin() }
         observe(NSWindow.didEnterFullScreenNotification) { view in
             // Asked to leave while going in: leave now. On the next turn: AppKit is still finishing
