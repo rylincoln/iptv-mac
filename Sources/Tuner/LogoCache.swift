@@ -6,14 +6,15 @@ import Synchronization
 ///
 /// Decoded thumbnails, at the size rows draw them, live in a bounded memory cache. The downloaded
 /// bytes live in a 200 MB disk `URLCache`, so a relaunch does not fetch them again. At most six
-/// downloads run at once; a request whose row scrolls away is cancelled, in the queue or on the wire;
-/// a URL that failed is not tried again this session. Logo URLs come from the playlist and are never
-/// logged.
+/// downloads run at once; a request whose row scrolls away is cancelled, in the queue or on the wire.
+/// A URL whose response is not a usable logo (not 2xx, too large, or not an image) is a miss and is
+/// not tried again this session; one whose transfer failed (offline, timed out) is tried again when
+/// its row next shows. Logo URLs come from the playlist and are never logged.
 ///
 /// A download is bounded in memory and time, because the URLs are untrusted: the body is read as a
 /// stream and the request is cancelled, closing the connection, as soon as the declared length or the
-/// bytes received pass `maxDownloadBytes`; the whole transfer, however slowly it trickles, is cut off
-/// after `timeoutIntervalForResource`. Either way the download slot is freed and the URL is a miss.
+/// bytes received pass `maxDownloadBytes` (a miss); the whole transfer, however slowly it trickles, is
+/// cut off after `timeoutIntervalForResource` (a failed transfer). Either way the download slot is freed.
 final class LogoCache: @unchecked Sendable {  // NSCache, Mutex and the actor are thread-safe; the rest is immutable
     /// The size rows draw logos at.
     static let pointSize: CGFloat = 32
@@ -58,7 +59,7 @@ final class LogoCache: @unchecked Sendable {  // NSCache, Mutex and the actor ar
     }
 
     /// The logo as a thumbnail `pointSize` across, or nil for no logo. Nil also when the calling task
-    /// is cancelled, which is not remembered as a failure.
+    /// is cancelled or the transfer fails, neither of which is remembered as a miss.
     @concurrent func image(for urlString: String) async -> NSImage? {
         let key = urlString as NSString
         if let hit = images.object(forKey: key) { return hit }
@@ -73,18 +74,19 @@ final class LogoCache: @unchecked Sendable {  // NSCache, Mutex and the actor ar
         do {
             data = try await download(url)
         } catch {
-            return nil  // cancelled: the row went away
+            return nil  // cancelled (the row went away), or the transfer failed: try again next time
         }
         guard let data, let image = thumbnail(from: data) else {
-            recordMiss(urlString)
+            recordMiss(urlString)  // the server answered, with something that is not a usable logo
             return nil
         }
         images.setObject(image, forKey: key)
         return image
     }
 
-    /// The body of a successful response, or nil on any failure, including a body over the size cap.
-    /// Throws only when cancelled. The download slot is released on every path.
+    /// The body of a successful response, or nil for a response that is not 2xx or a body over the
+    /// size cap. Throws when cancelled or when the transfer fails (no connection, a timeout), neither
+    /// of which says anything about the logo. The download slot is released on every path.
     private func download(_ url: URL) async throws -> Data? {
         try await gate.acquire()
         let body: Data?
@@ -92,8 +94,7 @@ final class LogoCache: @unchecked Sendable {  // NSCache, Mutex and the actor ar
             body = try await fetch(url)
         } catch {
             await gate.release()
-            if Task.isCancelled { throw CancellationError() }
-            return nil
+            throw error
         }
         await gate.release()
         return body
