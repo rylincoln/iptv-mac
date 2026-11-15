@@ -2,7 +2,8 @@
 
 A native macOS client for IPTV: it imports an M3U playlist and an XMLTV guide, lists channels with
 what is on now, searches channels and programmes, and plays through VLCKit with reconnects it
-manages itself.
+manages itself. The video can fill the screen, or shrink to a small picture that floats over
+other apps.
 
 Requires macOS 26 or later and a Swift 6.2 or later toolchain. There is no Xcode project; it is a
 Swift package.
