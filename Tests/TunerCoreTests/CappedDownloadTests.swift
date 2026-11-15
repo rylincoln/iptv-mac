@@ -51,10 +51,10 @@ private final class ChunkStub: URLProtocol {
     }
 }
 
-private func stubSession(wholeTransferLimit: TimeInterval = 60) -> URLSession {
+private func stubSession() -> URLSession {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.protocolClasses = [ChunkStub.self]
-    configuration.timeoutIntervalForResource = wholeTransferLimit
+    configuration.timeoutIntervalForResource = 60
     return URLSession(configuration: configuration)
 }
 
@@ -114,12 +114,13 @@ private let limit = 4096
         #expect(error?.code == .cannotFindHost)
     }
 
-    /// A logo slower than the session's whole-transfer limit fails as timed out: a failed transfer,
-    /// which `UnreachableHost` does not remember.
-    @Test func aTransferSlowerThanTheSessionAllowsTimesOut() async throws {
-        let url = ChunkStub.url("/slow", Reply(chunks: [bytes(2)], hangs: true))
+    /// A logo slower than the session's whole-transfer limit fails as timed out, part way through its
+    /// body: the error comes through as it is, and `UnreachableHost` does not remember it, so the host
+    /// is tried again. (More than 512 bytes come first, so the body has begun when it fails.)
+    @Test func aTransferTimedOutPartWayThrowsTimedOut() async throws {
+        let url = ChunkStub.url("/slow", Reply(chunks: [bytes(600)], failure: URLError(.timedOut)))
         let error = await #expect(throws: URLError.self) {
-            try await CappedDownload.body(from: url, session: stubSession(wholeTransferLimit: 0.2), limit: limit)
+            try await CappedDownload.body(from: url, session: stubSession(), limit: limit)
         }
         #expect(error?.code == .timedOut)
         #expect(UnreachableHost.memory(for: error ?? URLError(.unknown)) == nil)

@@ -121,6 +121,40 @@ private func sleepUntilCancelled(noting cancels: Counter) async throws -> Int {
         #expect(runs.value == 2)
     }
 
+    /// The first run is abandoned, holds on after its cancellation, and ends only once a later run for
+    /// the key is under way: its ending answers no one, and the later run's caller gets the later value.
+    @Test func anAbandonedRunEndingLateLeavesTheLaterRunAlone() async throws {
+        let shared = SharedWork<String, Int>()
+        let runs = Counter()
+        let abandonedMayEnd = Latch()
+        let abandonedEnded = Counter()
+        let laterMayEnd = Latch()
+        let work: @Sendable () async throws -> Int = {
+            if runs.increment() == 1 {
+                try? await Task.sleep(for: .seconds(3600))  // until cancelled
+                await abandonedMayEnd.wait()
+                abandonedEnded.increment()
+                return -1
+            }
+            await laterMayEnd.wait()
+            return 2
+        }
+        let first = Task { try await shared.value(for: "a", work: work) }
+        await waitUntil { shared.waiterCount(for: "a") == 1 }
+        first.cancel()
+        await #expect(throws: CancellationError.self) { try await first.value }
+        let second = Task { try await shared.value(for: "a", work: work) }
+        await waitUntil { runs.value == 2 }
+        await abandonedMayEnd.open()
+        await waitUntil { abandonedEnded.value == 1 }
+        // The abandoned run reports its ending as soon as its work returns; give it time to.
+        try await Task.sleep(for: .milliseconds(20))
+        #expect(shared.waiterCount(for: "a") == 1)
+        await laterMayEnd.open()
+        #expect(try await second.value == 2)
+        #expect(shared.inFlightCount == 0)
+    }
+
     @Test func aKeyIsForgottenOnceItsWorkEnds() async throws {
         let shared = SharedWork<String, Int>()
         let runs = Counter()

@@ -30,6 +30,16 @@ import Testing
         #expect(clock.date(at: later) == wallStart.addingTimeInterval(5))
     }
 
+    /// `now()` is the date at the continuous clock's present reading. Started far from today, it cannot
+    /// pass for the wall clock's date.
+    @Test func nowIsTheDateAtTheContinuousClocksPresentReading() {
+        let clock = ContinuousDate(wallStart: wallStart, start: start)
+        let before = clock.date(at: .now)
+        let now = clock.now()
+        let after = clock.date(at: .now)
+        #expect(before <= now && now <= after)
+    }
+
     @Test func nowNeverGoesBackAndStartsNearTheWallClock() {
         let clock = ContinuousDate()
         #expect(abs(clock.now().timeIntervalSinceNow) < 5)
