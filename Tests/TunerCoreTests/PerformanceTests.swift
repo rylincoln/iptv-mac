@@ -1,5 +1,6 @@
 import Foundation
 import Synchronization
+import GRDB
 import Testing
 @testable import TunerCore
 
@@ -50,7 +51,18 @@ private func footprint() -> Int {
             task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
         }
     }
-    return result == KERN_SUCCESS ? Int(info.phys_footprint) : 0
+    guard result == KERN_SUCCESS else {
+        Issue.record("task_info failed (\(result)); memory numbers are not trustworthy")
+        return 0
+    }
+    return Int(info.phys_footprint)
+}
+
+/// Footprint after asking malloc to return free pages, so heap left over from earlier work
+/// cannot hide growth in the work being measured.
+private func settledFootprint() -> Int {
+    malloc_zone_pressure_relief(nil, 0)
+    return footprint()
 }
 
 /// Samples the footprint every few milliseconds on a background thread and keeps the maximum.
@@ -91,25 +103,66 @@ private struct Generator {
     }
 }
 
-private let words = [
-    "All", "American", "Action", "Auto", "Atlantic", "Arena", "Academy", "Africa", "Animal", "Art",
-    "Best", "Big", "Black", "Breaking", "Bay", "Beyond", "Classic", "College", "Football", "Championship",
-    "City", "Cooking", "Crime", "Daily", "Dance", "Day", "Drama", "East", "Evening", "Extreme",
-    "Family", "Final", "Game", "Golden", "Great", "Home", "House", "Hockey", "Inside", "Island",
-    "Junior", "Late", "Live", "Love", "Magic", "Master", "Match", "Morning", "Movie", "Music",
-    "National", "News", "Night", "Ocean", "Open", "Premier", "Prime", "Queen", "Race", "Report",
-    "Road", "Rugby", "Soccer", "Special", "Sports", "Story", "Summer", "Super", "Talk", "Tonight",
-    "Tour", "Triple", "United", "Valley", "Voice", "Weekend", "West", "Wild", "World", "Zone",
-]
+// A seeded pseudo-vocabulary of 25,000 distinct words. Words start with English-like first letters
+// and common digraphs ("th", "co", "st"...), and are drawn with Zipf frequency (rank r has weight 1/r),
+// so a short prefix expands to thousands of index terms, as in a real guide. The words the other
+// tests search for sit at plausible ranks.
+private let vocabularySize = 25_000
+
+private let vocabulary: [String] = {
+    var g = Generator(state: 12345)
+    let starts: [Character: [String]] = [
+        "t": ["th", "to", "tr", "ta", "te", "ti"], "a": ["an", "al", "ar", "at", "ab", "ac"],
+        "o": ["on", "or", "ov", "of"], "i": ["in", "im", "is"], "s": ["st", "sp", "se", "sh", "su", "sa", "so"],
+        "w": ["wh", "wa", "wi", "wo"], "c": ["co", "ch", "ca", "ce", "cr"], "b": ["be", "br", "bo", "ba"],
+        "p": ["pr", "pa", "pe", "po", "pl"], "h": ["ha", "he", "ho", "hi"], "f": ["fo", "fr", "fi", "fa"],
+        "m": ["ma", "me", "mo", "mi"], "d": ["de", "di", "do", "da"], "r": ["re", "ro", "ra"],
+        "l": ["li", "le", "la", "lo"], "e": ["en", "ex", "el"], "n": ["no", "ne", "na"],
+        "g": ["ga", "go", "gr", "ge"],
+    ]
+    // First-letter weights per thousand words, roughly English.
+    let firstLetters = "tttttttttttttttt" + "aaaaaaaaaaaa" + "ssssssssssss" + "cccccccccc" + "pppppppppp"
+        + "bbbbbbbb" + "mmmmmmmm" + "ffffffff" + "wwwwwwww" + "hhhhhhhh" + "oooooooo" + "iiiiiii"
+        + "dddddd" + "rrrrrr" + "llllll" + "eeeee" + "nnnnn" + "gggg" + "ukjvyq"
+    let first = Array(firstLetters)
+    let vowels = Array("aeiouaeioe"), consonants = Array("tnrslcdmphbfgwy")
+    var seen = Set<String>(), result: [String] = []
+    while result.count < vocabularySize {
+        let letter = first[g.next(first.count)]
+        var word: String
+        if let options = starts[letter], g.next(100) < 85 {
+            word = options[g.next(options.count)]
+        } else {
+            word = String(letter) + String(vowels[g.next(vowels.count)])
+        }
+        for _ in 0..<(1 + g.next(6)) {
+            word.append(g.next(2) == 0 ? consonants[g.next(consonants.count)] : vowels[g.next(vowels.count)])
+        }
+        if seen.insert(word).inserted { result.append(word) }
+    }
+    for (rank, word) in [(10, "news"), (15, "sports"), (40, "live"), (120, "college"), (150, "football"),
+                         (300, "espn"), (500, "soccer"), (900, "footage")] {
+        result[rank] = word
+    }
+    return result
+}()
+
+/// A Zipf-distributed word: rank r is drawn with probability proportional to 1/r.
+private func zipfWord(_ g: inout Generator) -> String {
+    let u = Double(g.next(1_000_000)) / 1_000_000
+    return vocabulary[min(vocabularySize - 1, Int(pow(Double(vocabularySize), u)) - 1)]
+}
+
+private func capitalised(_ word: String) -> String { word.prefix(1).uppercased() + word.dropFirst() }
 
 private func phrase(_ g: inout Generator, count: Int) -> String {
-    (0..<count).map { _ in words[g.next(words.count)] }.joined(separator: " ")
+    (0..<count).map { _ in capitalised(zipfWord(&g)) }.joined(separator: " ")
 }
 
 /// About `bytes` bytes of prose, built from the vocabulary.
 private func prose(_ g: inout Generator, bytes: Int) -> String {
     var text = ""
-    while text.utf8.count < bytes { text += words[g.next(words.count)].lowercased() + " " }
+    while text.utf8.count < bytes { text += zipfWord(&g) + " " }
     return text.trimmingCharacters(in: .whitespaces) + "."
 }
 
@@ -137,7 +190,7 @@ private struct Dataset {
             let group = groups[i % groups.count]
             // Four in five carry the guide id; the rest can only be matched by name.
             let tvgID = i % 5 == 0 ? "" : " tvg-id=\"g\(i)\""
-            let name = i % 7 == 0 ? "ESPN \(i)" : "\(words[g.next(words.count)]) Channel \(i)"
+            let name = i % 7 == 0 ? "ESPN \(i)" : "\(capitalised(zipfWord(&g))) Channel \(i)"
             text += "#EXTINF:-1\(tvgID) tvg-name=\"\(name)\" tvg-logo=\"http://example.invalid/logo/\(i).png\" group-title=\"\(group)\",\(name)\n"
             text += "http://example.invalid/live/\(i).ts\n"
         }
@@ -232,8 +285,8 @@ private func xmltvStamp(_ date: Date) -> String {
                   c.year ?? 0, c.month ?? 0, c.day ?? 0, c.hour ?? 0, c.minute ?? 0, c.second ?? 0)
 }
 
-/// About 4,100 channels and 80,000 programmes around `now`; written in chunks, never held whole.
-private func writeGuideFile(to url: URL, now: Date) throws {
+/// About 4,100 channels and `programmes` programmes (80,000 by default) around `now`; written in chunks, never held whole.
+private func writeGuideFile(to url: URL, now: Date, programmes: Int = 80_000) throws {
     FileManager.default.createFile(atPath: url.path, contents: nil)
     let handle = try FileHandle(forWritingTo: url)
     defer { try? handle.close() }
@@ -246,8 +299,8 @@ private func writeGuideFile(to url: URL, now: Date) throws {
         }
     }
     let channelCount = 4_100
-    let perChannel = 80_000 / channelCount          // 19, with the remainder on the first channels
-    let extra = 80_000 - perChannel * channelCount
+    let perChannel = programmes / channelCount          // 19 at 80,000, with the remainder on the first channels
+    let extra = programmes - perChannel * channelCount
     for i in 0..<channelCount {
         buffer += "<channel id=\"g\(i)\"><display-name>Channel \(i)</display-name>"
         buffer += "<icon src=\"http://example.invalid/icon/\(i).png\"/></channel>\n"
@@ -294,6 +347,87 @@ private func fileMegabytes(_ url: URL) -> Double {
 
 @Suite(.serialized, .enabled(if: isReleaseBuild, "performance limits are release-build limits"), SharedFixture())
 struct PerformanceTests {
+    // The memory tests are declared first so they run before the others have churned the heap, and
+    // they return freed heap to the system before taking their baseline (see `settledFootprint`).
+
+    /// Imports `file` into a fresh store and returns the peak growth in MB.
+    @discardableResult
+    private func importGuideFile(
+        _ name: String, file: URL, f: Fixture, programmes: Int = 80_000, secondsLimit: Double = 10,
+        memoryCeilingMB: Double? = nil
+    ) async throws -> Double {
+        let store = try f.freshStore("scale-\(name)")
+        try loadPlaylist(store, f.data)
+        let source = try store.addSource(kind: .guide, location: file.path)
+        let service = ImportService(store: store)
+        let before = settledFootprint()
+        let sampler = PeakSampler()
+        let start = ContinuousClock.now
+        let outcome = try await service.importGuide(sourceID: source)
+        let ms = milliseconds(ContinuousClock.now - start)
+        let peak = sampler.stop()
+        let growth = megabytes(peak - before)
+        report("guideScale \(name)", String(
+            format: "%.0f ms, file %.1f MB, footprint before %.1f MB, peak %.1f MB, growth %.1f MB",
+            ms, fileMegabytes(file), megabytes(before), megabytes(peak), growth))
+        try? FileManager.default.removeItem(at: f.directory.appendingPathComponent("scale-\(name).sqlite"))
+        guard case .imported(let items, _) = outcome else { Issue.record("not imported"); return growth }
+        #expect(items == programmes)
+        #expect(ms < secondsLimit * 1000)
+        if let memoryCeilingMB { #expect(growth < memoryCeilingMB) }
+        return growth
+    }
+
+    /// Four times the data must not cost anything like four times the memory: that is what
+    /// streaming means. A parser or writer that kept every programme would roughly quadruple it.
+    private func checkMemoryDoesNotScale(gzipped: Bool) async throws {
+        let f = try fixture()
+        let label = gzipped ? "gzip" : "plain"
+        var growth: [Int: Double] = [:]
+        for programmes in [4_000, 40_000, 160_000] {   // the first is a warm-up
+            var file = f.directory.appendingPathComponent("guide-\(programmes).xml")
+            try writeGuideFile(to: file, now: Date(), programmes: programmes)
+            if gzipped {
+                let gz = f.directory.appendingPathComponent("guide-\(programmes).xml.gz")
+                try gzip(file, to: gz)
+                try FileManager.default.removeItem(at: file)
+                file = gz
+            }
+            growth[programmes] = try await importGuideFile(
+                "\(label)-n\(programmes)", file: file, f: f, programmes: programmes, secondsLimit: 40)
+            try FileManager.default.removeItem(at: file)
+        }
+        let small = try #require(growth[40_000]), large = try #require(growth[160_000])
+        report("memoryScaling \(label)", String(
+            format: "growth 40k %.1f MB, 160k %.1f MB, ratio %.2f (limit 1.5)", small, large, large / max(small, 0.1)))
+        #expect(large < small * 1.5)
+    }
+
+    @Test func guideImportMemoryDoesNotScaleWithFileSize() async throws {
+        try await checkMemoryDoesNotScale(gzipped: false)
+    }
+
+    @Test func guideImportMemoryDoesNotScaleWithGzipFileSize() async throws {
+        try await checkMemoryDoesNotScale(gzipped: true)
+    }
+
+    @Test func guideParseAndImportAtScale() async throws {
+        let f = try fixture()
+        let file = f.directory.appendingPathComponent("guide.xml")
+        try writeGuideFile(to: file, now: Date())
+        try await importGuideFile("plain", file: file, f: f, memoryCeilingMB: 13)
+    }
+
+    @Test func guideParseAndImportAtScaleGzipped() async throws {
+        let f = try fixture()
+        let file = f.directory.appendingPathComponent("guide-gz.xml")
+        try writeGuideFile(to: file, now: Date())
+        let gz = f.directory.appendingPathComponent("guide.xml.gz")
+        try gzip(file, to: gz)
+        try FileManager.default.removeItem(at: file)
+        try await importGuideFile("gzip", file: gz, f: f, memoryCeilingMB: 13)
+    }
+
     @Test func playlistImportUnderOneSecond() throws {
         let f = try fixture()
         let store = try f.freshStore("playlist")
@@ -313,6 +447,10 @@ struct PerformanceTests {
             try loadGuide(store, f.data)
         }
         #expect(ms < 10_000)
+        try store.db.writeWithoutTransaction { try $0.execute(sql: "PRAGMA wal_checkpoint(TRUNCATE)") }
+        let size = (try? FileManager.default.attributesOfItem(
+            atPath: f.directory.appendingPathComponent("guide.sqlite").path)[.size] as? Int) ?? nil
+        report("databaseFile after guide import", String(format: "%.1f MB", megabytes(size ?? 0)))
         #expect(try store.channels(in: .all, at: f.data.now).filter { $0.guideRef != nil }.count > 4_000)
     }
 
@@ -370,6 +508,20 @@ struct PerformanceTests {
         #expect(ms < 50)
     }
 
+    @Test func searchTwoLetterPrefixUnder50ms() throws {
+        let f = try fixture()
+        for prefix in ["th", "co"] {
+            let terms = vocabulary.filter { $0.hasPrefix(prefix) }.count
+            var total = 0
+            let ms = try median("search \"\(prefix)\" (\(terms) vocabulary words)", runs: 20) {
+                let r = try f.store.search(prefix, at: f.data.now)
+                total = r.onNow.count + r.later.count + r.channels.count
+            }
+            #expect(total > 0)
+            #expect(ms < 50)
+        }
+    }
+
     @Test func playlistReimportUnderOneSecond() throws {
         let f = try fixture()
         let store = try f.freshStore("reimport")
@@ -385,47 +537,5 @@ struct PerformanceTests {
         }
         #expect(ms < 1000)
         #expect(try store.channels(in: .favourites, at: f.data.now).count == 60)
-    }
-
-    // Peak memory growth ceilings (MB), about 1.5x the growth measured on the 38 MB file: the file is
-    // streamed, so growth stays near the file size (SQLite cache and index rebuild), not a multiple of it.
-    private func importGuideFile(
-        _ name: String, file: URL, f: Fixture, secondsLimit: Double, memoryCeilingMB: Double
-    ) async throws {
-        let store = try f.freshStore("scale-\(name)")
-        try loadPlaylist(store, f.data)
-        let source = try store.addSource(kind: .guide, location: file.path)
-        let service = ImportService(store: store)
-        let before = footprint()
-        let sampler = PeakSampler()
-        let start = ContinuousClock.now
-        let outcome = try await service.importGuide(sourceID: source)
-        let ms = milliseconds(ContinuousClock.now - start)
-        let peak = sampler.stop()
-        let growth = megabytes(peak - before)
-        report("guideScale \(name)", String(
-            format: "%.0f ms, file %.1f MB, footprint before %.1f MB, peak %.1f MB, growth %.1f MB",
-            ms, fileMegabytes(file), megabytes(before), megabytes(peak), growth))
-        guard case .imported(let items, _) = outcome else { Issue.record("not imported"); return }
-        #expect(items == 80_000)
-        #expect(ms < secondsLimit * 1000)
-        #expect(growth < memoryCeilingMB)
-    }
-
-    @Test func guideParseAndImportAtScale() async throws {
-        let f = try fixture()
-        let file = f.directory.appendingPathComponent("guide.xml")
-        try writeGuideFile(to: file, now: Date())
-        try await importGuideFile("plain", file: file, f: f, secondsLimit: 10, memoryCeilingMB: 100)
-    }
-
-    @Test func guideParseAndImportAtScaleGzipped() async throws {
-        let f = try fixture()
-        let file = f.directory.appendingPathComponent("guide-gz.xml")
-        try writeGuideFile(to: file, now: Date())
-        let gz = f.directory.appendingPathComponent("guide.xml.gz")
-        try gzip(file, to: gz)
-        try FileManager.default.removeItem(at: file)
-        try await importGuideFile("gzip", file: gz, f: f, secondsLimit: 10, memoryCeilingMB: 110)
     }
 }
