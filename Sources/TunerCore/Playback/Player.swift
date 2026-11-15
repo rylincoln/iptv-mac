@@ -21,6 +21,16 @@ public struct PlayerStats: Equatable, Sendable {
     }
 
     public static let zero = PlayerStats()
+
+    /// The highest input bitrate a reading may show: one gigabit per second.
+    public static let maxKbps: Double = 1_000_000
+
+    /// An input bitrate fit to show and to round to a whole number. The engine can hand back
+    /// uninitialised memory as statistics, so a reading that is not a finite number is 0, and the rest
+    /// is held to `0...maxKbps`.
+    public static func sanitisedKbps(_ kbps: Double) -> Double {
+        kbps.isFinite ? min(max(kbps, 0), maxKbps) : 0
+    }
 }
 
 @MainActor public protocol Player: AnyObject {
