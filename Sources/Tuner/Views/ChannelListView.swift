@@ -36,6 +36,17 @@ struct ChannelListView: View {
                         }
                     }
                 }
+                .onChange(of: focus.wrappedValue) { _, now in
+                    // The focus value can turn `.covered` after the change above has already run
+                    // (results arriving just as the list was clicked). Whenever it does, hand the
+                    // keyboard on, so the covered list never keeps it.
+                    guard now == .covered else { return }
+                    Task {
+                        if focus.wrappedValue == .covered {
+                            focus.wrappedValue = model.searchResults != nil ? .channelList : nil
+                        }
+                    }
+                }
             if let results = model.searchResults {
                 SearchResultsView(model: model, results: results, focus: focus)
             } else if !model.hasChannels {
@@ -75,7 +86,8 @@ struct ChannelListView: View {
             if let channel = channel(in: ids) { model.play(channel) }
         }
         .onKeyPress(.return) {
-            guard let id = model.selectedChannelID, let channel = channel(in: [id]) else { return .ignored }
+            // Covered, the list plays nothing, even if a key reaches it before focus has moved on.
+            guard !covered, let id = model.selectedChannelID, let channel = channel(in: [id]) else { return .ignored }
             model.play(channel)
             return .handled
         }
