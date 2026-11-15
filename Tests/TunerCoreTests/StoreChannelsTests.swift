@@ -78,7 +78,7 @@ private let now = Date(timeIntervalSince1970: 1_800_000_000)
     @Test func favouritesToggleAndSurviveReimport() throws {
         let (store, id) = try seeded([ch("A", "a"), ch("B", "b")])
         let a = try #require(try store.channels(in: .all, at: now).first)
-        try store.setFavourite(true, channelID: a.id)
+        try store.setFavourite(true, streamURL: a.streamURL, name: a.name)
         #expect(try store.channels(in: .favourites, at: now).map(\.name) == ["A"])
         #expect(try store.channels(in: .all, at: now).map(\.isFavourite) == [true, false])
 
@@ -86,14 +86,14 @@ private let now = Date(timeIntervalSince1970: 1_800_000_000)
         #expect(try store.channels(in: .favourites, at: now).map(\.name) == ["A"])
 
         let again = try #require(try store.channels(in: .all, at: now).first)
-        try store.setFavourite(false, channelID: again.id)
+        try store.setFavourite(false, streamURL: again.streamURL, name: again.name)
         #expect(try store.channels(in: .favourites, at: now).isEmpty)
     }
 
     @Test func favouriteFollowsRenamedURLByName() throws {
         let (store, id) = try seeded([ch("A", "a"), ch("B", "b")])
         let a = try #require(try store.channels(in: .all, at: now).first)
-        try store.setFavourite(true, channelID: a.id)
+        try store.setFavourite(true, streamURL: a.streamURL, name: a.name)
 
         try store.replaceChannels(sourceID: id, with: [ch("A", "a2"), ch("B", "b")])
         let favs = try store.channels(in: .favourites, at: now)
@@ -104,7 +104,7 @@ private let now = Date(timeIntervalSince1970: 1_800_000_000)
     @Test func favouriteWithAmbiguousNameDoesNotFollow() throws {
         let (store, id) = try seeded([ch("A", "a")])
         let a = try #require(try store.channels(in: .all, at: now).first)
-        try store.setFavourite(true, channelID: a.id)
+        try store.setFavourite(true, streamURL: a.streamURL, name: a.name)
 
         try store.replaceChannels(sourceID: id, with: [ch("A", "x"), ch("A", "y")])
         #expect(try store.channels(in: .favourites, at: now).isEmpty)
@@ -117,11 +117,85 @@ private let now = Date(timeIntervalSince1970: 1_800_000_000)
     @Test func favouriteOfRemovedChannelDisappearsQuietly() throws {
         let (store, id) = try seeded([ch("A", "a"), ch("B", "b")])
         let a = try #require(try store.channels(in: .all, at: now).first)
-        try store.setFavourite(true, channelID: a.id)
+        try store.setFavourite(true, streamURL: a.streamURL, name: a.name)
 
         try store.replaceChannels(sourceID: id, with: [ch("B", "b")])
         #expect(try store.channels(in: .favourites, at: now).isEmpty)
         #expect(try store.channels(in: .all, at: now).map(\.name) == ["B"])
+    }
+
+    @Test func recentsSurviveReimport() throws {
+        let (store, id) = try seeded([ch("A", "a"), ch("B", "b")])
+        let a = try #require(try store.channels(in: .all, at: now).first)
+        try store.recordWatched(streamURL: a.streamURL, name: a.name, at: now)
+
+        try store.replaceChannels(sourceID: id, with: [ch("A", "a"), ch("B", "b")])
+        #expect(try store.channels(in: .recents, at: now).map(\.name) == ["A"])
+    }
+
+    @Test func recentFollowsRenamedURLByName() throws {
+        let (store, id) = try seeded([ch("A", "a"), ch("B", "b")])
+        let a = try #require(try store.channels(in: .all, at: now).first)
+        try store.recordWatched(streamURL: a.streamURL, name: a.name, at: now)
+
+        try store.replaceChannels(sourceID: id, with: [ch("A", "a2"), ch("B", "b")])
+        let recents = try store.channels(in: .recents, at: now)
+        #expect(recents.map(\.name) == ["A"])
+        #expect(recents.first?.streamURL == url("a2"))
+    }
+
+    @Test func recentWithAmbiguousNameDoesNotFollow() throws {
+        let (store, id) = try seeded([ch("A", "a")])
+        let a = try #require(try store.channels(in: .all, at: now).first)
+        try store.recordWatched(streamURL: a.streamURL, name: a.name, at: now)
+
+        try store.replaceChannels(sourceID: id, with: [ch("A", "x"), ch("A", "y")])
+        #expect(try store.channels(in: .recents, at: now).isEmpty)
+
+        // Comes back when the original URL returns.
+        try store.replaceChannels(sourceID: id, with: [ch("A", "a"), ch("A", "y")])
+        #expect(try store.channels(in: .recents, at: now).map(\.streamURL) == [url("a")])
+    }
+
+    @Test func recentOfRemovedChannelDisappearsQuietly() throws {
+        let (store, id) = try seeded([ch("A", "a"), ch("B", "b")])
+        let a = try #require(try store.channels(in: .all, at: now).first)
+        try store.recordWatched(streamURL: a.streamURL, name: a.name, at: now)
+
+        try store.replaceChannels(sourceID: id, with: [ch("B", "b")])
+        #expect(try store.channels(in: .recents, at: now).isEmpty)
+        #expect(try store.channels(in: .all, at: now).map(\.name) == ["B"])
+    }
+
+    /// The list on screen was read before an import that dropped a channel, so its ids are stale: every
+    /// row after the dropped one now has the id of the next channel down.
+    @Test func favouriteAndWatchThroughARowReadBeforeAReimportLandOnThatChannel() throws {
+        let (store, id) = try seeded([ch("A", "a"), ch("B", "b"), ch("C", "c")])
+        let shown = try store.channels(in: .all, at: now)
+        try store.replaceChannels(sourceID: id, with: [ch("B", "b"), ch("C", "c")])
+        let b = shown[1]
+        try store.setFavourite(true, streamURL: b.streamURL, name: b.name)
+        try store.recordWatched(streamURL: b.streamURL, name: b.name, at: now)
+        let favourites = try store.channels(in: .favourites, at: now).map(\.name)
+        let recents = try store.channels(in: .recents, at: now).map(\.name)
+        #expect(favourites == ["B"])
+        #expect(recents == ["B"])
+    }
+
+    /// With a second playlist the re-imported channels get ids no stale row has, so nothing must be lost.
+    @Test func favouriteAndWatchThroughAStaleRowWithTwoPlaylists() throws {
+        let (store, id) = try seeded([ch("A", "a"), ch("B", "b")])
+        let other = try store.addSource(kind: .playlist, location: "http://example.invalid/other")
+        try store.replaceChannels(sourceID: other, with: [ch("X", "x")])
+        let shown = try store.channels(in: .all, at: now)
+        try store.replaceChannels(sourceID: id, with: [ch("A", "a"), ch("B", "b")])
+        let b = try #require(shown.first { $0.name == "B" })
+        try store.setFavourite(true, streamURL: b.streamURL, name: b.name)
+        try store.recordWatched(streamURL: b.streamURL, name: b.name, at: now)
+        let favourites = try store.channels(in: .favourites, at: now).map(\.name)
+        let recents = try store.channels(in: .recents, at: now).map(\.name)
+        #expect(favourites == ["B"])
+        #expect(recents == ["B"])
     }
 
     @Test func recentsOrderedNewestFirstAndCappedAt30() throws {
@@ -129,7 +203,8 @@ private let now = Date(timeIntervalSince1970: 1_800_000_000)
         let (store, _) = try seeded(channels)
         let rows = try store.channels(in: .all, at: now)
         for (i, row) in rows.enumerated() {
-            try store.recordWatched(channelID: row.id, at: Date(timeIntervalSince1970: 1_000 + Double(i)))
+            try store.recordWatched(
+                streamURL: row.streamURL, name: row.name, at: Date(timeIntervalSince1970: 1_000 + Double(i)))
         }
         let recents = try store.channels(in: .recents, at: now)
         #expect(recents.count == 30)
@@ -140,9 +215,9 @@ private let now = Date(timeIntervalSince1970: 1_800_000_000)
     @Test func recordWatchedTwiceKeepsOneRow() throws {
         let (store, _) = try seeded([ch("A", "a"), ch("B", "b")])
         let rows = try store.channels(in: .all, at: now)
-        try store.recordWatched(channelID: rows[0].id, at: Date(timeIntervalSince1970: 100))
-        try store.recordWatched(channelID: rows[1].id, at: Date(timeIntervalSince1970: 200))
-        try store.recordWatched(channelID: rows[0].id, at: Date(timeIntervalSince1970: 300))
+        try store.recordWatched(streamURL: rows[0].streamURL, name: rows[0].name, at: Date(timeIntervalSince1970: 100))
+        try store.recordWatched(streamURL: rows[1].streamURL, name: rows[1].name, at: Date(timeIntervalSince1970: 200))
+        try store.recordWatched(streamURL: rows[0].streamURL, name: rows[0].name, at: Date(timeIntervalSince1970: 300))
         #expect(try store.channels(in: .recents, at: now).map(\.name) == ["A", "B"])
     }
 
@@ -150,7 +225,7 @@ private let now = Date(timeIntervalSince1970: 1_800_000_000)
         let (store, _) = try seeded([ch("A", "same"), ch("A HD", "same"), ch("B", "b")])
         let rows = try store.channels(in: .all, at: now)
         #expect(rows.count == 3)
-        try store.setFavourite(true, channelID: rows[0].id)
+        try store.setFavourite(true, streamURL: rows[0].streamURL, name: rows[0].name)
         #expect(try store.channels(in: .all, at: now).map(\.isFavourite) == [true, true, false])
     }
 
@@ -174,7 +249,7 @@ private let now = Date(timeIntervalSince1970: 1_800_000_000)
             let id = try store.addSource(kind: .playlist, location: "http://example.invalid/list")
             try store.replaceChannels(sourceID: id, with: [ch("A", "a"), ch("B", "b")])
             let a = try #require(try store.channels(in: .all, at: now).first)
-            try store.setFavourite(true, channelID: a.id)
+            try store.setFavourite(true, streamURL: a.streamURL, name: a.name)
             store.setBufferMs(1500, forStreamURL: url("a"))
         }
 

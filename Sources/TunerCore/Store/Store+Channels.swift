@@ -141,32 +141,28 @@ extension Store {
 
     // MARK: Favourites and recents
 
-    public func setFavourite(_ on: Bool, channelID: Int64) throws {
+    // Both are keyed by the channel's stream URL and name, never by its row id: ids are reassigned on
+    // every playlist import, so a row read before an import would name another channel, or none.
+
+    public func setFavourite(_ on: Bool, streamURL: String, name: String) throws {
         try db.write { db in
-            guard let row = try Row.fetchOne(
-                db, sql: "SELECT streamURL, name FROM channel WHERE id = ?", arguments: [channelID])
-            else { return }
-            let streamURL: String = row[0]
             if on {
                 try db.execute(sql: """
                     INSERT OR IGNORE INTO favourite(streamURL, name, addedAt) VALUES (?, ?, ?)
-                    """, arguments: [streamURL, row[1] as String, Int64(Date().timeIntervalSince1970)])
+                    """, arguments: [streamURL, name, Int64(Date().timeIntervalSince1970)])
             } else {
                 try db.execute(sql: "DELETE FROM favourite WHERE streamURL = ?", arguments: [streamURL])
             }
         }
     }
 
-    public func recordWatched(channelID: Int64, at: Date) throws {
+    public func recordWatched(streamURL: String, name: String, at: Date) throws {
         try db.write { db in
-            guard let row = try Row.fetchOne(
-                db, sql: "SELECT streamURL, name FROM channel WHERE id = ?", arguments: [channelID])
-            else { return }
             try db.execute(sql: """
                 INSERT INTO recent(streamURL, name, lastWatchedAt) VALUES (?, ?, ?)
                 ON CONFLICT(streamURL) DO UPDATE SET name = excluded.name,
                     lastWatchedAt = excluded.lastWatchedAt
-                """, arguments: [row[0] as String, row[1] as String, Int64(at.timeIntervalSince1970)])
+                """, arguments: [streamURL, name, Int64(at.timeIntervalSince1970)])
             try db.execute(sql: """
                 DELETE FROM recent WHERE streamURL NOT IN (
                     SELECT streamURL FROM recent ORDER BY lastWatchedAt DESC LIMIT \(Self.recentsKept))

@@ -528,8 +528,8 @@ struct PerformanceTests {
         try loadPlaylist(store, f.data)
         try loadGuide(store, f.data)
         let rows = try store.channels(in: .all, at: f.data.now)
-        for row in rows.prefix(60) { try store.setFavourite(true, channelID: row.id) }
-        for row in rows.suffix(40) { try store.recordWatched(channelID: row.id, at: f.data.now) }
+        for row in rows.prefix(60) { try store.setFavourite(true, streamURL: row.streamURL, name: row.name) }
+        for row in rows.suffix(40) { try store.recordWatched(streamURL: row.streamURL, name: row.name, at: f.data.now) }
         let id = try #require(try store.sources().first { $0.kind == .playlist }).id
         let ms = try time("playlistReimport 5000 channels over existing data") {
             let parsed = M3UParser.parse(f.data.m3uText)

@@ -143,7 +143,9 @@ typealias ChannelSection = TunerCore.Section
         supervisor.play(streamURL: channel.streamURL)
         if showsStats { refreshStats() }
         let store = self.store
-        Task.detached(priority: .utility) { try? store.recordWatched(channelID: channel.id, at: Date()) }
+        Task.detached(priority: .utility) {
+            try? store.recordWatched(streamURL: channel.streamURL, name: channel.name, at: Date())
+        }
     }
 
     func stop() {
@@ -267,7 +269,7 @@ typealias ChannelSection = TunerCore.Section
         let store = self.store
         Task {
             await Task.detached(priority: .userInitiated) {
-                try? store.setFavourite(on, channelID: channel.id)
+                try? store.setFavourite(on, streamURL: channel.streamURL, name: channel.name)
             }.value
             if currentSection == .favourites { reloadRows() }
         }
