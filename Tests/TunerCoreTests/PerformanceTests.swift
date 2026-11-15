@@ -31,12 +31,13 @@ private func time(_ name: String, _ body: () throws -> Void) rethrows -> Double 
     return ms
 }
 
-/// Median of `runs` timings of `body`, in milliseconds.
+/// Median of `runs` timings of `body`, in milliseconds: for an even count, the mean of the two middle ones.
 private func median(_ name: String, runs: Int, _ body: () throws -> Void) rethrows -> Double {
     var samples: [Double] = []
-    for _ in 0..<runs { samples.append(milliseconds(try ContinuousClock().measure(body))) }
+    for _ in 0..<max(runs, 1) { samples.append(milliseconds(try ContinuousClock().measure(body))) }
     samples.sort()
-    let result = samples[samples.count / 2]
+    let middle = samples.count / 2
+    let result = samples.count % 2 == 0 ? (samples[middle - 1] + samples[middle]) / 2 : samples[middle]
     report(name, String(format: "median %.2f ms (min %.2f, max %.2f, runs %d)",
                         result, samples[0], samples[samples.count - 1], runs))
     return result
@@ -203,7 +204,9 @@ private struct Dataset {
         for i in 0..<Self.channelCount {
             let name = i % 7 == 0 ? "ESPN \(i)" : channels[i].name
             guide.append(ParsedGuideChannel(id: "g\(i)", displayNames: [name]))
-            // Eight hours back to a week ahead: sixteen back-to-back slots, one of them on now.
+            // Sixteen slots of 30 to 120 minutes, the first starting two to three hours back. On two
+            // channels in three they run back to back, to 5 to 30 hours ahead, and one is on now. On every
+            // third a five-hour gap follows each slot: nothing is on now, and the last ends 3 to 4.5 days ahead.
             var start = now.addingTimeInterval(-3 * 3600 + TimeInterval(g.next(60)) * 60)
             for _ in 0..<Self.programmesPerChannel {
                 let length = TimeInterval(30 + g.next(4) * 30) * 60
@@ -308,7 +311,7 @@ private func writeGuideFile(to url: URL, now: Date, programmes: Int = 80_000) th
     }
     for i in 0..<channelCount {
         var start = now.addingTimeInterval(-3 * 3600 + TimeInterval(g.next(60)) * 60)
-        for j in 0..<(perChannel + (i < extra ? 1 : 0)) {
+        for _ in 0..<(perChannel + (i < extra ? 1 : 0)) {
             let stop = start.addingTimeInterval(TimeInterval(30 + g.next(4) * 30) * 60)
             buffer += "<programme start=\"\(xmltvStamp(start))\" stop=\"\(xmltvStamp(stop))\" channel=\"g\(i)\">"
             buffer += "<title lang=\"en\">\(xmlEscape(phrase(&g, count: 3)))</title>"
@@ -317,7 +320,6 @@ private func writeGuideFile(to url: URL, now: Date, programmes: Int = 80_000) th
             if g.next(2) == 0 { buffer += "<category lang=\"en\">\(g.next(4) == 0 ? "Sports" : "Drama")</category>" }
             buffer += "</programme>\n"
             start = stop
-            _ = j
             try flush()
         }
     }
@@ -325,7 +327,8 @@ private func writeGuideFile(to url: URL, now: Date, programmes: Int = 80_000) th
     try flush(force: true)
 }
 
-private func gzip(_ file: URL, to out: URL) throws {
+/// Runs `/usr/bin/gzip` and awaits its exit, without blocking a thread of the test's executor.
+private func gzip(_ file: URL, to out: URL) async throws {
     FileManager.default.createFile(atPath: out.path, contents: nil)
     let output = try FileHandle(forWritingTo: out)
     defer { try? output.close() }
@@ -333,9 +336,44 @@ private func gzip(_ file: URL, to out: URL) throws {
     process.executableURL = URL(fileURLWithPath: "/usr/bin/gzip")
     process.arguments = ["-c", file.path]
     process.standardOutput = output
-    try process.run()
-    process.waitUntilExit()
-    try #require(process.terminationStatus == 0, "gzip failed")
+    let status: Int32 = try await withCheckedThrowingContinuation { continuation in
+        process.terminationHandler = { continuation.resume(returning: $0.terminationStatus) }
+        do {
+            try process.run()
+        } catch {
+            process.terminationHandler = nil  // never launched, so it never fires
+            continuation.resume(throwing: error)
+        }
+    }
+    try #require(status == 0, "gzip failed")
+}
+
+/// `text` as a provider might send it next: in reverse order, the channels at `moving` given new
+/// addresses under the same names, the first 50 not in `keeping` gone, and 50 new channels added.
+private func changedPlaylist(_ text: String, moving: Set<String>, keeping: Set<String>) -> String {
+    let lines = text.split(separator: "\n").map(String.init)
+    var entries: [(info: String, url: String)] = []
+    var index = 1  // after "#EXTM3U"
+    while index + 1 < lines.count {
+        entries.append((lines[index], lines[index + 1]))
+        index += 2
+    }
+    var dropped = 0
+    entries.removeAll { entry in
+        guard dropped < 50, !keeping.contains(entry.url) else { return false }
+        dropped += 1
+        return true
+    }
+    var result = "#EXTM3U\n"
+    for entry in entries.reversed() {
+        let url = moving.contains(entry.url) ? entry.url.replacingOccurrences(of: "/live/", with: "/moved/") : entry.url
+        result += entry.info + "\n" + url + "\n"
+    }
+    for k in 0..<50 {
+        result += "#EXTINF:-1 tvg-name=\"Added \(k)\" group-title=\"US| NEWS\",Added \(k)\n"
+        result += "http://example.invalid/added/\(k).ts\n"
+    }
+    return result
 }
 
 private func fileMegabytes(_ url: URL) -> Double {
@@ -389,7 +427,7 @@ struct PerformanceTests {
             try writeGuideFile(to: file, now: Date(), programmes: programmes)
             if gzipped {
                 let gz = f.directory.appendingPathComponent("guide-\(programmes).xml.gz")
-                try gzip(file, to: gz)
+                try await gzip(file, to: gz)
                 try FileManager.default.removeItem(at: file)
                 file = gz
             }
@@ -423,7 +461,7 @@ struct PerformanceTests {
         let file = f.directory.appendingPathComponent("guide-gz.xml")
         try writeGuideFile(to: file, now: Date())
         let gz = f.directory.appendingPathComponent("guide.xml.gz")
-        try gzip(file, to: gz)
+        try await gzip(file, to: gz)
         try FileManager.default.removeItem(at: file)
         try await importGuideFile("gzip", file: gz, f: f, memoryCeilingMB: 13)
     }
@@ -491,7 +529,13 @@ struct PerformanceTests {
         let ms = try median("nowPlaying query", runs: 5) {
             count = try f.store.nowPlaying(at: f.data.now).count
         }
-        #expect(count > 0)
+        // Every guide channel with a programme on now, in the store's whole seconds.
+        let now = Store.unixSeconds(f.data.now)
+        let onNow = Set(f.data.programmes.filter {
+            Store.unixSeconds($0.start) <= now && Store.unixSeconds($0.stop) > now
+        }.map(\.channelID))
+        #expect(!onNow.isEmpty)
+        #expect(count == onNow.count)
         #expect(ms < 50)
     }
 
@@ -539,14 +583,31 @@ struct PerformanceTests {
         try loadPlaylist(store, f.data)
         try loadGuide(store, f.data)
         let rows = try store.channels(in: .all, at: f.data.now)
-        for row in rows.prefix(60) { try store.setFavourite(true, streamURL: row.streamURL, name: row.name) }
-        for row in rows.suffix(40) { try store.recordWatched(streamURL: row.streamURL, name: row.name, at: f.data.now) }
+        let favourites = Array(rows.prefix(60)), watched = Array(rows.suffix(40))
+        for row in favourites { try store.setFavourite(true, streamURL: row.streamURL, name: row.name) }
+        for (k, row) in watched.enumerated() {
+            try store.recordWatched(
+                streamURL: row.streamURL, name: row.name, at: f.data.now.addingTimeInterval(TimeInterval(k)))
+        }
+        let recents = try store.channels(in: .recents, at: f.data.now).map(\.name)
+        #expect(recents.count == Store.recentsShown)
+        // The provider's next list: another order, 50 channels gone and 50 new, and 20 favourites and
+        // 10 of the recents shown moved to new addresses under the same names.
+        let moved = Set(favourites.prefix(20).map(\.streamURL) + watched.suffix(10).map(\.streamURL))
+        let kept = Set(favourites.map(\.streamURL) + watched.map(\.streamURL))
+        let changed = changedPlaylist(f.data.m3uText, moving: moved, keeping: kept)
         let id = try #require(try store.sources().first { $0.kind == .playlist }).id
-        let ms = try time("playlistReimport 5000 channels over existing data") {
-            let parsed = M3UParser.parse(f.data.m3uText)
+        let ms = try time("playlistReimport 5000 channels, changed, over existing data") {
+            let parsed = M3UParser.parse(changed)
             try store.replaceChannels(sourceID: id, with: parsed.channels)
         }
         #expect(ms < 1000)
-        #expect(try store.channels(in: .favourites, at: f.data.now).count == 60)
+        #expect(try store.channels(in: .all, at: f.data.now).count == Dataset.channelCount)
+        let favouritesNow = try store.channels(in: .favourites, at: f.data.now)
+        #expect(Set(favouritesNow.map(\.name)) == Set(favourites.map(\.name)))
+        #expect(!favouritesNow.contains { moved.contains($0.streamURL) })
+        let recentsNow = try store.channels(in: .recents, at: f.data.now)
+        #expect(recentsNow.map(\.name) == recents)
+        #expect(!recentsNow.contains { moved.contains($0.streamURL) })
     }
 }
