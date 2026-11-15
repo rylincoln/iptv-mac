@@ -23,7 +23,7 @@ trap 'rm -rf "$TMP"' EXIT
 if [ -n "${VLCKIT_ARCHIVE:-}" ]; then
   cp "$VLCKIT_ARCHIVE" "$TMP/$ARCHIVE"
 else
-  echo "Downloading VLCKit $VERSION…"
+  echo "Downloading VLCKit ${VERSION}…"
   curl -fL --progress-bar -o "$TMP/$ARCHIVE" "$BASE_URL/$ARCHIVE"
 fi
 
