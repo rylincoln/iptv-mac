@@ -171,8 +171,7 @@ private struct ProgrammeDetails: View {
                 Text(subTitle).lineLimit(2)
             }
             HStack(spacing: 6) {
-                let today = Calendar.current.dateInterval(of: .day, for: now)
-                Text("\(StartTime.text(programme.start, today: today)) – \(time(programme.stop))")
+                Text("\(StartTime.text(programme.start, days: StartTimeForm.Days(now: now))) – \(time(programme.stop))")
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
                 if programme.start <= now && now < programme.stop {

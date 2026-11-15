@@ -70,9 +70,9 @@ struct SearchResultsView: View {
         // Read once here, so rows get plain values and nothing per row touches the model.
         let nowPlaying = model.nowPlaying
         let now = model.nowPlayingAt
-        let today = Calendar.current.dateInterval(of: .day, for: now)
+        let days = StartTimeForm.Days(now: now)
         return ScrollViewReader { proxy in
-            resultList(nowPlaying: nowPlaying, now: now, today: today)
+            resultList(nowPlaying: nowPlaying, now: now, days: days)
                 // New results show from the top, where their first row is selected. Asked to centre the
                 // top row, the list can only scroll to its very top, so the first section's header
                 // shows above the row rather than floating over it. Only a new search scrolls: a
@@ -85,7 +85,7 @@ struct SearchResultsView: View {
         }
     }
 
-    private func resultList(nowPlaying: [Int64: ProgrammeRow], now: Date, today: DateInterval?) -> some View {
+    private func resultList(nowPlaying: [Int64: ProgrammeRow], now: Date, days: StartTimeForm.Days) -> some View {
         List(selection: $model.selectedResultID) {
             if !results.onNow.isEmpty {
                 Section("On now") {
@@ -97,7 +97,7 @@ struct SearchResultsView: View {
             if !results.later.isEmpty {
                 Section("Later") {
                     ForEach(results.later, id: \.laterID) { hit in
-                        ProgrammeHitRow(hit: hit, start: StartTime.text(hit.programme.start, today: today))
+                        ProgrammeHitRow(hit: hit, start: StartTime.text(hit.programme.start, days: days))
                     }
                 }
             }
@@ -160,14 +160,19 @@ private struct ProgrammeHitRow: View {
 }
 
 /// A programme's start in the Mac's time zone and format: "8:00 PM" today, "Sat 8:00 PM" on another
-/// day. The two styles are made once; formatting reuses them.
+/// day, "Nov 21 at 8:00 PM" six or more days on (`StartTimeForm`). The styles are made once;
+/// formatting reuses them.
 enum StartTime {
     private static let time = Date.FormatStyle(date: .omitted, time: .shortened)
     private static let dayAndTime = Date.FormatStyle(date: .omitted, time: .shortened).weekday(.abbreviated)
+    private static let dateAndTime = Date.FormatStyle(date: .omitted, time: .shortened).month(.abbreviated).day()
 
-    /// `today` is worked out once by the caller, not once per row.
-    static func text(_ start: Date, today: DateInterval?) -> String {
-        if let today, today.start <= start, start < today.end { return start.formatted(time) }
-        return start.formatted(dayAndTime)
+    /// `days` is worked out once by the caller, not once per row.
+    static func text(_ start: Date, days: StartTimeForm.Days) -> String {
+        switch days.form(of: start) {
+        case .time: return start.formatted(time)
+        case .weekdayAndTime: return start.formatted(dayAndTime)
+        case .dateAndTime: return start.formatted(dateAndTime)
+        }
     }
 }
