@@ -43,7 +43,8 @@ struct SearchResultsView: View {
     private func resultList(nowPlaying: [Int64: ProgrammeRow], now: Date, days: StartTimeForm.Days) -> some View {
         List(selection: $model.selectedResultID) {
             if !results.channels.isEmpty {
-                Section("Channels") {
+                // Nothing matched what was typed: these are for the nearest words that exist.
+                Section(results.channelsFoundFor.map { "Channels matching “\($0)”" } ?? "Channels") {
                     ForEach(results.channels, id: \.resultID) { channel in
                         ChannelRowView(
                             channel: channel, programme: channel.guideRef.flatMap { nowPlaying[$0] }, now: now)

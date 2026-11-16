@@ -156,6 +156,106 @@ private func single(_ programmes: [ParsedProgramme]) throws -> Store {
         #expect(results.later.map(\.programme.title) == ["Highlights", "News"])
     }
 
+    @Test func lettersAndDigitsAreFoundTogetherOrApart() throws {
+        let store = try Store.inMemory()
+        try setUp(store, playlist: [pc("ESPN2", "1"), pc("ESPN 2 HD", "2"), pc("ESPN", "3"), pc("Sky 1", "4")],
+            guide: [], programmes: [])
+        #expect(Set(try store.search("espn2", at: now).channels.map(\.name)) == ["ESPN2", "ESPN 2 HD"])
+        #expect(Set(try store.search("espn 2", at: now).channels.map(\.name)) == ["ESPN2", "ESPN 2 HD"])
+        #expect(try store.search("espn", at: now).channels.first?.name == "ESPN")
+    }
+
+    @Test func aRegionInFrontAndQualityBehindDoNotMakeANameLonger() throws {
+        #expect(ChannelName.coreLength("NBC 4 NY") == 8)
+        #expect(ChannelName.coreLength("USA  NBC 4 NY FHD") == 8)
+        #expect(ChannelName.coreLength("US: NBC 4 NY") == 8)
+        #expect(ChannelName.coreLength("UK | NBC 4 NY 4K") == 8)
+        #expect(ChannelName.coreLength("USA NBC 4 NY") == 12)  // one space: the name may begin with the word
+        #expect(ChannelName.coreLength("Arena: NBC") == 9)  // too long for a region
+        #expect(ChannelName.coreLength("HD") == 2)
+        #expect(ChannelName.divided("US: ESPN2 4K") == "US ESPN 2 4 K")
+        let store = try Store.inMemory()
+        try setUp(store, playlist: [pc("NBC Sport", "1"), pc("USA  NBC 4 NY FHD", "2")], guide: [], programmes: [])
+        #expect(try store.search("nbc", at: now).channels.map(\.name) == ["USA  NBC 4 NY FHD", "NBC Sport"])
+    }
+
+    @Test func channelsAreFoundByTheirGuideNamesSecondNameAndGroupAfterThoseFoundByName() throws {
+        let store = try Store.inMemory()
+        let p = try store.addSource(kind: .playlist, location: "http://example.invalid/list")
+        try store.replaceChannels(sourceID: p, with: [
+            ParsedChannel(name: "Movies", groupTitle: "NBC Family", streamURL: "http://example.invalid/1"),
+            ParsedChannel(name: "USA: KNSD", tvgID: "knsd", streamURL: "http://example.invalid/2"),
+            ParsedChannel(name: "Seven", tvgName: "NBC7", streamURL: "http://example.invalid/3"),
+            ParsedChannel(name: "CNBC", streamURL: "http://example.invalid/4"),
+            ParsedChannel(name: "NBC Sports Regional", streamURL: "http://example.invalid/5"),
+        ])
+        #expect(try store.search("nbc", at: now).channels.map(\.name) == ["NBC Sports Regional", "Seven", "Movies", "CNBC"])
+        // The guide arrives and names a channel: found without another playlist import.
+        let g = try store.addSource(kind: .guide, location: "http://example.invalid/guide")
+        try store.replaceGuide(sourceID: g, now: now) { writer in
+            try writer.add(ParsedGuideChannel(id: "knsd", displayNames: ["KNSD", "NBC San Diego"]))
+        }
+        #expect(try store.search("nbc", at: now).channels.map(\.name)
+            == ["NBC Sports Regional", "USA: KNSD", "Seven", "Movies", "CNBC"])
+        #expect(try store.search("nbc san", at: now).channels.map(\.name) == ["USA: KNSD"])
+        // A term in the name and another in the group.
+        #expect(try store.search("movies family", at: now).channels.map(\.name) == ["Movies"])
+    }
+
+    @Test func aChannelPickedForTheTextComesFirstTheNextTime() throws {
+        let store = try Store.inMemory()
+        try setUp(store, playlist: [pc("NBC", "1"), pc("NBC Sports", "2"), pc("NBC 4 New York", "3")],
+            guide: [], programmes: [])
+        #expect(try store.search("nbc", at: now).channels.first?.name == "NBC")
+        try store.recordSearchPick(" NBC ", streamURL: "http://example.invalid/3", at: now)
+        #expect(try store.search("nbc", at: now).channels.map(\.name) == ["NBC 4 New York", "NBC", "NBC Sports"])
+        #expect(try store.search("nb", at: now).channels.first?.name == "NBC 4 New York")  // on the way to typing it
+        // The latest pick first; and a pick for other text changes nothing here.
+        try store.recordSearchPick("nbc", streamURL: "http://example.invalid/2", at: at(1))
+        try store.recordSearchPick("sports", streamURL: "http://example.invalid/2", at: at(2))
+        #expect(try store.search("nbc", at: now).channels.map(\.name) == ["NBC Sports", "NBC 4 New York", "NBC"])
+        #expect(try store.search("nbc 4", at: now).channels.map(\.name) == ["NBC 4 New York"])
+        try store.recordSearchPick("!!", streamURL: "http://example.invalid/1", at: now)  // nothing to keep it under
+    }
+
+    @Test func onlyTheNewestPicksAreKept() throws {
+        let store = try Store.inMemory()
+        try setUp(store, playlist: [pc("NBC", "1")], guide: [], programmes: [])
+        for index in 0..<(Store.searchPicksKept + 20) {
+            try store.recordSearchPick("q\(index)", streamURL: "http://example.invalid/1", at: at(Double(index)))
+        }
+        #expect(try store.searchPickCount() == Store.searchPicksKept)
+    }
+
+    @Test func aMistypedChannelIsFoundByTheNearestWord() throws {
+        let store = try Store.inMemory()
+        try setUp(store, playlist: [pc("ESPN", "1"), pc("ESPN2", "2"), pc("NBC Sports", "3"), pc("Discovery", "4")],
+            guide: [], programmes: [])
+        let mended = try store.search("espm", at: now)
+        #expect(mended.channels.map(\.name) == ["ESPN", "ESPN2"])
+        #expect(mended.channelsFoundFor == "espn")
+        #expect(try store.search("nbc sprots", at: now).channelsFoundFor == "nbc sports")
+        #expect(try store.search("discvoery", at: now).channels.map(\.name) == ["Discovery"])
+        // Found as typed: nothing is mended.
+        #expect(try store.search("espn", at: now).channelsFoundFor == nil)
+        // Nothing near enough: nothing found.
+        let none = try store.search("zzzzqq", at: now)
+        #expect(none.channels.isEmpty && none.channelsFoundFor == nil)
+    }
+
+    @Test func typosAreMendedWithinOneOrTwoEdits() {
+        let words = [(word: "espn", count: 5), (word: "nbc", count: 9), (word: "nba", count: 2), (word: "discovery", count: 1)]
+        #expect(Typo.mended(["espm"], vocabulary: words) == ["espn"])
+        #expect(Typo.mended(["epsn"], vocabulary: words) == ["espn"])  // two letters swapped is one edit
+        #expect(Typo.mended(["nbs"], vocabulary: words) == ["nbc"])  // equally near: the word in more names
+        #expect(Typo.mended(["discovry", "nbc"], vocabulary: words) == ["discovery", "nbc"])
+        #expect(Typo.mended(["esp"], vocabulary: words) == nil)  // begins a word: not a typo
+        #expect(Typo.mended(["es"], vocabulary: words) == nil)  // too short to judge
+        #expect(Typo.mended(["1234"], vocabulary: words) == nil)
+        #expect(Typo.mended(["exxm"], vocabulary: words) == nil)  // two edits in a short word
+        #expect(Typo.edits(Array("kitten"), Array("sitting"), atMost: 5) == 3)
+    }
+
     @Test func allTermsMustMatch() throws {
         let store = try single([prog("alpha", -1, 1, "College Football")])
         #expect(try store.search("college basketball", at: now).onNow.isEmpty)
@@ -279,6 +379,7 @@ private func single(_ programmes: [ParsedProgramme]) throws -> Store {
         #expect(try store.search("football", at: now).onNow.isEmpty)
         #expect(try store.search("hockey", at: now).onNow.count == 1)
         #expect(try store.search("zebra", at: now).channels.map(\.name) == ["Zebra"])
-        #expect(try store.search("alpha", at: now).channels.isEmpty)
+        // No longer its name; still what its guide channel is called.
+        #expect(try store.search("alpha", at: now).channels.map(\.name) == ["Zebra"])
     }
 }

@@ -135,6 +135,36 @@ extension Store {
             if old?.ref == match?.guideRef && old?.kind == match?.kind.rawValue { continue }
             try update.execute(arguments: [match?.guideRef, match?.kind.rawValue, query.channelID])
         }
+        try rebuildChannelSearch(db)
+    }
+
+    /// Fills the channel search index from the channels as they now are, each with the names its
+    /// guide channel goes by. Run whenever channels or their guide links may have changed: a few
+    /// thousand short rows.
+    static func rebuildChannelSearch(_ db: Database) throws {
+        try db.execute(sql: "INSERT INTO channel_search(channel_search) VALUES ('delete-all')")
+        let rows = try Row.fetchAll(db, sql: """
+            SELECT c.id, c.name, c.tvgName, c.groupTitle, g.displayNames
+            FROM channel c LEFT JOIN guideChannel g ON g.ref = c.guideRef
+            """)
+        let insert = try db.makeStatement(sql: """
+            INSERT INTO channel_search(rowid, name, divided, otherNames, groupTitle)
+            VALUES (?, ?, ?, ?, ?)
+            """)
+        for row in rows {
+            let id: Int64 = row[0]
+            let name: String = row[1]
+            let tvgName: String? = row[2]
+            let groupTitle: String? = row[3]
+            let guideNames: String? = row[4]  // divided by a control character, which the index reads as a gap
+            // Both names divided: the guide and the playlist's second name are untidy the same way.
+            let others = [guideNames, tvgName == name ? nil : tvgName].compactMap { $0 }
+            try insert.execute(arguments: [
+                id, name, ChannelName.divided(name),
+                others.isEmpty ? nil : others.map { "\($0) \(ChannelName.divided($0))" }.joined(separator: "\u{1F}"),
+                groupTitle,
+            ])
+        }
     }
 
     /// What a `ProgrammeRow` is read from, in `programmeRow(_:)`'s order, in a query that names the

@@ -125,6 +125,32 @@ public final class Store: Sendable {
             // The guide reads programmes by time and joins each to its channels.
             try db.execute(sql: "CREATE INDEX channel_guideRef ON channel(guideRef)")
         }
+        migrator.registerMigration("v5") { db in
+            // Channel search reads more than the name: the name with letters divided from digits,
+            // the guide's names for the channel, the playlist's second name and its group. Built
+            // afresh whenever channels or their guide links change (`rebuildChannelSearch`), so it
+            // keeps no copy of the text. `channel_words` lists its words, for mending a typo.
+            // `searchPick`: what was played from the results for what was typed.
+            try db.execute(sql: """
+                DROP TABLE channel_fts;
+                ALTER TABLE channel ADD COLUMN coreLength INTEGER NOT NULL DEFAULT 0;
+                CREATE VIRTUAL TABLE channel_search USING fts5(
+                    name, divided, otherNames, groupTitle, content='');
+                CREATE VIRTUAL TABLE channel_words USING fts5vocab(channel_search, 'row');
+                CREATE TABLE searchPick (
+                    query TEXT NOT NULL,
+                    streamURL TEXT NOT NULL,
+                    pickedAt INTEGER NOT NULL,
+                    PRIMARY KEY (query, streamURL)
+                ) WITHOUT ROWID;
+                """)
+            let update = try db.makeStatement(sql: "UPDATE channel SET coreLength = ? WHERE id = ?")
+            for row in try Row.fetchAll(db, sql: "SELECT id, name FROM channel") {
+                let name: String = row[1]
+                try update.execute(arguments: [ChannelName.coreLength(name), row[0] as Int64])
+            }
+            try Store.rebuildChannelSearch(db)
+        }
         return migrator
     }
 

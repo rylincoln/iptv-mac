@@ -146,8 +146,11 @@ public struct SearchResults: Equatable, Sendable {
     public var onNow: [ProgrammeHit]
     /// at < start <= at + 7 days, ordered by start.
     public var later: [ProgrammeHit]
-    /// Name matches, ordered by sortIndex.
+    /// The best match first (`Store.search`).
     public var channels: [ChannelRow]
+    /// Set when nothing matched what was typed and `channels` were found for this in its place:
+    /// the typed words with a mistyped one mended.
+    public var channelsFoundFor: String? = nil
 
     public static let empty = SearchResults(onNow: [], later: [], channels: [])
 }

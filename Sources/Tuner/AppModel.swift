@@ -563,6 +563,13 @@ typealias ChannelSection = TunerCore.Section
             if let hit = searchResultHit(id) { chosenProgramme = hit }
         } else if let channel = searchResultChannel(id) {
             play(channel)
+            // A channel picked for what was typed is listed first the next time it is typed.
+            if case .channel = id, let text = resultsText {
+                let store = self.store
+                Task.detached(priority: .utility) {
+                    try? store.recordSearchPick(text, streamURL: channel.streamURL, at: Date())
+                }
+            }
         }
     }
 

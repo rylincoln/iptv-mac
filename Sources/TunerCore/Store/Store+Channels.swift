@@ -71,17 +71,16 @@ extension Store {
             try db.execute(sql: "DELETE FROM channel WHERE sourceID = ?", arguments: [sourceID])
             let insert = try db.makeStatement(sql: """
                 INSERT INTO channel(sourceID, name, tvgID, tvgName, logoURL, groupTitle, streamURL,
-                    sortIndex, isSportsGroup)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    sortIndex, isSportsGroup, coreLength)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """)
             for (index, channel) in channels.enumerated() {
                 try insert.execute(arguments: [
                     sourceID, channel.name, channel.tvgID, channel.tvgName, channel.logoURL,
                     channel.groupTitle, channel.streamURL, index,
-                    SportsClassifier.isSportsGroup(channel.groupTitle),
+                    SportsClassifier.isSportsGroup(channel.groupTitle), ChannelName.coreLength(channel.name),
                 ])
             }
-            try db.execute(sql: "INSERT INTO channel_fts(channel_fts) VALUES ('rebuild')")
             for table in ["favourite", "recent"] {
                 try db.execute(sql: """
                     UPDATE OR IGNORE \(table) SET streamURL = (
