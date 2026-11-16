@@ -2,7 +2,7 @@ import SwiftUI
 import TunerCore
 
 /// Shown over the channel list, which stays in the window beneath it, while a search has results:
-/// "On now", "Later" and "Channels", each left out when empty, as one list the arrow keys move
+/// "Channels", "On now" and "Later", each left out when empty, as one list the arrow keys move
 /// straight through. Return or a double-click acts on a row (`AppModel.activateSearchResult`).
 struct SearchResultsView: View {
     @Bindable var model: AppModel
@@ -42,6 +42,14 @@ struct SearchResultsView: View {
 
     private func resultList(nowPlaying: [Int64: ProgrammeRow], now: Date, days: StartTimeForm.Days) -> some View {
         List(selection: $model.selectedResultID) {
+            if !results.channels.isEmpty {
+                Section("Channels") {
+                    ForEach(results.channels, id: \.resultID) { channel in
+                        ChannelRowView(
+                            channel: channel, programme: channel.guideRef.flatMap { nowPlaying[$0] }, now: now)
+                    }
+                }
+            }
             if !results.onNow.isEmpty {
                 Section("On now") {
                     ForEach(results.onNow, id: \.onNowID) { hit in
@@ -53,14 +61,6 @@ struct SearchResultsView: View {
                 Section("Later") {
                     ForEach(results.later, id: \.laterID) { hit in
                         ProgrammeHitRow(hit: hit, start: StartTime.text(hit.programme.start, days: days))
-                    }
-                }
-            }
-            if !results.channels.isEmpty {
-                Section("Channels") {
-                    ForEach(results.channels, id: \.resultID) { channel in
-                        ChannelRowView(
-                            channel: channel, programme: channel.guideRef.flatMap { nowPlaying[$0] }, now: now)
                     }
                 }
             }

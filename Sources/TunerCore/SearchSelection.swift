@@ -18,14 +18,14 @@ extension ChannelRow {
 extension SearchResults {
     public var isEmpty: Bool { onNow.isEmpty && later.isEmpty && channels.isEmpty }
 
-    /// Every row, in the order the list shows them: on now, later, then channels.
+    /// Every row, in the order the list shows them: channels, on now, then later.
     public var resultIDs: [SearchResultID] {
-        onNow.map(\.onNowID) + later.map(\.laterID) + channels.map(\.resultID)
+        channels.map(\.resultID) + onNow.map(\.onNowID) + later.map(\.laterID)
     }
 
     /// The top row, without listing the rest.
     public var firstResultID: SearchResultID? {
-        onNow.first?.onNowID ?? later.first?.laterID ?? channels.first?.resultID
+        channels.first?.resultID ?? onNow.first?.onNowID ?? later.first?.laterID
     }
 
     /// The row to select in these results, found again for the same text as `old`, where `id` was

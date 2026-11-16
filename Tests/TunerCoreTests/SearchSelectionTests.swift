@@ -47,7 +47,7 @@ private func later(_ programmeID: Int64, _ channelID: Int64) -> SearchResultID {
 
     @Test func rowsAreListedInTheOrderShown() {
         let found = results(onNow: [(1, 1)], later: [(5, 2), (6, 3)], channels: [4])
-        #expect(found.resultIDs == [onNow(1, 1), later(5, 2), later(6, 3), .channel(4)])
+        #expect(found.resultIDs == [.channel(4), onNow(1, 1), later(5, 2), later(6, 3)])
     }
 
     @Test func aRowStillHereStaysSelected() {
@@ -98,9 +98,9 @@ private func later(_ programmeID: Int64, _ channelID: Int64) -> SearchResultID {
     @Test func withNothingSelectedOrNothingNearItLeftTheTopRowIsSelected() {
         let old = results(onNow: [(1, 1)], channels: [2])
         let new = results(onNow: [(8, 8)], channels: [9])
-        #expect(new.selection(following: nil, in: old) == onNow(8, 8))
-        #expect(new.selection(following: onNow(1, 1), in: old) == onNow(8, 8))
-        #expect(new.selection(following: .channel(5), in: old) == onNow(8, 8))  // never listed
+        #expect(new.selection(following: nil, in: old) == .channel(9))
+        #expect(new.selection(following: onNow(1, 1), in: old) == .channel(9))
+        #expect(new.selection(following: .channel(5), in: old) == .channel(9))  // never listed
         #expect(results().selection(following: onNow(1, 1), in: old) == nil)
     }
 }

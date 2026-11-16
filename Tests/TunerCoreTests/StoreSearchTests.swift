@@ -99,6 +99,63 @@ private func single(_ programmes: [ParsedProgramme]) throws -> Store {
         #expect(try store.search("espn", at: now).channels.map(\.name) == ["ESPN", "ESPN2"])
     }
 
+    @Test func channelsAreOrderedByHowWellTheirNamesMatch() throws {
+        let store = try Store.inMemory()
+        try setUp(store, playlist: [
+            pc("CNBC", "1"), pc("NBCSN", "2"), pc("NBC Sports Regional Plus", "3"), pc("USA NBC 4", "4"),
+            pc("NBC", "5"), pc("Weather", "6"),
+        ], guide: [], programmes: [])
+        // A whole word, the shortest name first; then the start of a word; then inside one.
+        #expect(try store.search("nbc", at: now).channels.map(\.name)
+            == ["NBC", "USA NBC 4", "NBC Sports Regional Plus", "NBCSN", "CNBC"])
+        // Every term must be found, each in its own way.
+        #expect(try store.search("nbc sp", at: now).channels.map(\.name) == ["NBC Sports Regional Plus"])
+        #expect(try store.search("usa nb", at: now).channels.map(\.name) == ["USA NBC 4"])
+    }
+
+    @Test func amongChannelsMatchingAlikeFavouritesThenWatchedOnesComeFirst() throws {
+        let store = try Store.inMemory()
+        try setUp(store, playlist: [
+            pc("NBC 1", "1"), pc("NBC 2", "2"), pc("NBC 3", "3"), pc("NBC", "4"), pc("NBCSN", "5"),
+        ], guide: [], programmes: [])
+        try store.recordWatched(streamURL: "http://example.invalid/2", name: "NBC 2", at: now)
+        try store.setFavourite(true, streamURL: "http://example.invalid/3", name: "NBC 3")
+        try store.setFavourite(true, streamURL: "http://example.invalid/5", name: "NBCSN")
+        // A favourite that matches less well stays below those that match better.
+        #expect(try store.search("nbc", at: now).channels.map(\.name) == ["NBC 3", "NBC 2", "NBC", "NBC 1", "NBCSN"])
+    }
+
+    @Test func theChannelsCutOffByTheLimitAreTheOnesMatchingLeastWell() throws {
+        let store = try Store.inMemory()
+        try setUp(
+            store, playlist: (1...8).map { pc("NBC Sports Region \($0)", "r\($0)") } + [pc("NBC", "n")],
+            guide: [], programmes: [])
+        #expect(try store.search("nbc", at: now, limit: 3).channels.first?.name == "NBC")
+    }
+
+    @Test func aTermInsideAWordFindsChannelsButNotProgrammes() throws {
+        let store = try single([prog("alpha", -1, 1, "Alphabet Soup")])
+        #expect(try store.search("lph", at: now).channels.map(\.name) == ["Alpha"])
+        #expect(try store.search("lph", at: now).onNow.isEmpty)
+        // LIKE's own characters never reach it: like any symbol they only divide the terms.
+        #expect(try store.search("%", at: now).channels.isEmpty)
+        #expect(try store.search("a_x", at: now).channels.isEmpty)
+    }
+
+    @Test func programmesFoundByTitleComeBeforeThoseFoundByDescription() throws {
+        let store = try Store.inMemory()
+        try setUp(store, playlist: [pc("One", "1", tvgID: "one"), pc("Two", "2", tvgID: "two")], guide: ["one", "two"],
+            programmes: [
+                prog("one", -1, 1, "Talk Show", desc: "Tonight: the cup final reviewed"),
+                prog("two", -1, 1, "Cup Final"),
+                prog("one", 1, 2, "News", desc: "Cup final reaction"),
+                prog("two", 3, 4, "Highlights", subTitle: "Cup final"),
+            ])
+        let results = try store.search("cup final", at: now)
+        #expect(results.onNow.map(\.programme.title) == ["Cup Final", "Talk Show"])
+        #expect(results.later.map(\.programme.title) == ["Highlights", "News"])
+    }
+
     @Test func allTermsMustMatch() throws {
         let store = try single([prog("alpha", -1, 1, "College Football")])
         #expect(try store.search("college basketball", at: now).onNow.isEmpty)
